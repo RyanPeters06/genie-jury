@@ -393,7 +393,12 @@
   top: 25px;
   z-index: 8;
 }
-.stage-top > span {
+.stage-actions {
+  align-items: center;
+  display: flex;
+  gap: 9px;
+}
+.stage-actions > span {
   background: #ffffff8c;
   border: 1px solid #5481a2;
   border-radius: 99px;
@@ -401,6 +406,21 @@
   font: 600 9px "DM Mono";
   letter-spacing: 0.09em;
   padding: 8px 12px;
+}
+.end-session {
+  background: #ffffffcf;
+  border: 1px solid #b85f39;
+  border-radius: 99px;
+  box-shadow: 0 2px 0 #b85f39;
+  color: #9d492c;
+  cursor: pointer;
+  font: 700 9px "DM Mono";
+  letter-spacing: 0.08em;
+  padding: 8px 11px;
+}
+.end-session:hover {
+  background: #fff0df;
+  transform: translateY(-1px);
 }
 .pitch-stage .jury-sky {
   inset: 0;

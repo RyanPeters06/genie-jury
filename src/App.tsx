@@ -233,6 +233,10 @@ function App() {
 
   function finishSession() {
     manualRecognitionStop.current = true
+    if (advanceTimer.current) {
+      window.clearTimeout(advanceTimer.current)
+      advanceTimer.current = null
+    }
     recognitionRef.current?.stop()
     stopInputCapture()
     stopJurorAudio()
@@ -260,7 +264,7 @@ function App() {
     {stage === 'text-fallback' && <section className="text-screen"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><form onSubmit={submitTextPitch}><p>TYPE YOUR CASE</p><h2>What idea are you asking<br />the Jury to believe in?</h2><div className="mode-toggle">{(['Hackathon', 'Startup'] as const).map((item) => <button type="button" className={mode === item ? 'selected' : ''} onClick={() => setMode(item)} key={item}>{item} mode</button>)}</div><textarea value={pitch} onChange={(event) => setPitch(event.target.value)} /><button className="sun-button" type="submit">SUMMON THE JURY <i>→</i></button></form></section>}
 
     {['user-speaking', 'researching', 'juror-speaking', 'awaiting-answer'].includes(stage) && <section className="pitch-stage">
-      <div className="stage-top"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><span>{mode} MODE · {caseName}</span></div>
+      <div className="stage-top"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><div className="stage-actions"><span>{mode} MODE · {caseName}</span><button className="end-session" onClick={finishSession}>END SESSION</button></div></div>
       <JurySky activeIndex={stage === 'user-speaking' ? -1 : activeIndex} talkingIndex={stage === 'juror-speaking' ? activeIndex : -1} onJurorSelect={(index) => { if (stage !== 'user-speaking') { setActiveIndex(index); setStage('juror-speaking') } }} />
       <div className="voice-cue" aria-live="polite"><div className="cue-label"><span className={`live-dot ${stage === 'user-speaking' ? 'recording' : ''}`} />{stageStatus}<span className="connection-state">{connection === 'connected' ? 'CONNECTED' : connection === 'checking' ? 'CHECKING' : connection === 'demo-fallback' ? 'DEMO FALLBACK' : 'SERVICE UNAVAILABLE'}</span><button onClick={() => { stopJurorAudio(); setMuted((current) => !current) }} aria-label={muted ? 'Unmute jury voices' : 'Mute jury voices'}>{muted ? 'UNMUTE' : 'MUTE'}</button></div><div className="cue-body"><div className="wave" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div><p>{stageLine}</p>{stage === 'user-speaking' && <button className="end-pitch" onClick={endVoicePitch}>I’M DONE <i>→</i></button>}{stage === 'juror-speaking' && <button className="end-pitch" onClick={() => setStage('awaiting-answer')}>CONTINUE <i>→</i></button>}{stage === 'awaiting-answer' && <button className="end-pitch" onClick={advanceJury}>{activeIndex === 3 ? 'HEAR VERDICT' : 'NEXT JUROR'} <i>→</i></button>}</div></div>
     </section>}
