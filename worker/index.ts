@@ -23,13 +23,23 @@ interface JuryEvent { id: string; type: EventType; createdAt: string; data: Reco
 interface JurySessionRecord { id: string; mode: 'Hackathon' | 'Startup'; pitch: string; stage: Stage; activeJuror: string | null; events: JuryEvent[]; createdAt: string; updatedAt: string; expiresAt: string }
 interface Claim { claim: string; type: 'market' | 'competition' | 'feasibility' | 'user' | 'business'; importance: number; confidence: number; researchQuery: string; evidenceStatus: 'verified' | 'contested' | 'unproven' }
 interface Evidence { status: 'verified' | 'contested' | 'unproven'; sourceUrl?: string; title?: string; excerpt?: string; capturedAt: string; screenshotCaptured: boolean }
+interface AgentTurn { juror: JurorId; line: string; cue: string }
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000
+const LIVE_RESEARCH_BUDGET_MS = 6_000
+const JUROR_GENERATION_BUDGET_MS = 5_500
 const JUROR_LINES: Record<JurorId, string> = {
   ember: 'The moment is strong. The scope is not. Pick one magical interaction and make it impossible to ignore.',
   gale: 'You said nobody does this. I found close alternatives—but none with your exact hackathon wedge.',
   tide: 'I would use this before demo day, when I need an honest teammate instead of an encouraging chatbot.',
   volt: 'If your pitch says AI-powered before it says who has the problem, I am throwing the lamp.',
+}
+
+const JUROR_BRIEFS: Record<JurorId, { cue: string; role: string; focus: string }> = {
+  ember: { cue: 'Pressure-testing the build', role: 'Ember, the Builder', focus: 'Find the smallest shippable proof of value. Challenge unclear scope, technical hand-waving, and unowned execution.' },
+  gale: { cue: 'Checking the receipts', role: 'Gale, the Skeptic', focus: 'Challenge factual claims using supplied evidence only. Call unsupported claims unproven; never invent a source or competitor.' },
+  tide: { cue: 'Speaking for the user', role: 'Tide, the User Advocate', focus: 'Force specificity about the user, their painful moment, why they would care, and what makes this easier than the current workaround.' },
+  volt: { cue: 'Delivering the useful roast', role: 'Volt, the Jester', focus: 'Deliver one playful but kind roast, then expose the most important unresolved weakness in plain language.' },
 }
 
 const json = (value: unknown, init: ResponseInit = {}) => new Response(JSON.stringify(value), { ...init, headers: { 'content-type': 'application/json; charset=utf-8', ...init.headers } })
@@ -109,6 +119,7 @@ export class JurySession {
     if (request.method === 'GET' && url.pathname === '/events') return json({ events: session.events })
     if (request.method === 'POST' && url.pathname === '/events') return this.appendEvent(request, session)
     if (request.method === 'POST' && url.pathname === '/research') return this.research(session)
+    if (request.method === 'POST' && url.pathname === '/turn') return this.prepareJurorTurn(request, session)
     return failure('Route not found.', 404)
   }
 
@@ -141,6 +152,34 @@ export class JurySession {
     return json({ session, claims, evidence })
   }
 
+  private async prepareJurorTurn(request: Request, session: JurySessionRecord): Promise<Response> {
+    const body = await request.json<{ juror?: JurorId; transcript?: string }>().catch(() => null)
+    if (!body?.juror || !JUROR_BRIEFS[body.juror]) return failure('A valid juror is required.')
+    const transcript = body.transcript?.trim() || session.pitch
+    this.append(session, 'transcript.final', { transcript })
+
+    let evidence: Evidence | undefined
+    if (body.juror === 'gale') {
+      this.append(session, 'research.started', { owner: 'gale' })
+      // Research should inform Gale, never make the builder wait through a
+      // slow model or cloud-browser round trip. A deterministic claim is an
+      // honest fallback and will be marked unproven if evidence is not ready.
+      const claims = deterministicClaims(`${session.pitch}\nLatest builder response: ${transcript}`)
+      const highestRisk = claims.sort((a, b) => b.importance - a.importance)[0]
+      evidence = highestRisk ? await researchClaimWithinBudget(highestRisk, this.env) : undefined
+      this.append(session, 'evidence.added', { claims, evidence: evidence ?? { status: 'unproven', capturedAt: new Date().toISOString(), screenshotCaptured: false } })
+    }
+
+    const latestEvidence = evidence ?? [...session.events].reverse().find((event) => event.type === 'evidence.added')?.data.evidence
+    const turn = await generateJurorTurnWithinBudget(body.juror, session.pitch, transcript, latestEvidence, this.env)
+    session.stage = 'juror-speaking'
+    session.activeJuror = body.juror
+    this.append(session, 'juror.queued', { juror: body.juror, reason: 'live agent turn prepared' })
+    this.append(session, 'juror.speaking', { ...turn })
+    await this.save(session)
+    return json(turn)
+  }
+
   private async save(session: JurySessionRecord) {
     await this.state.storage.put('session', session)
     if (!this.env.DB) return
@@ -165,6 +204,39 @@ function deterministicClaims(pitch: string): Claim[] {
   return pitch.split(/[.!?]/).map((sentence) => sentence.trim()).filter(Boolean).slice(0, 3).map((claim, index) => ({ claim, type: index === 0 ? 'competition' : index === 1 ? 'user' : 'feasibility', importance: 1 - index * .15, confidence: .3, researchQuery: `${claim} competitors alternatives`, evidenceStatus: 'unproven' }))
 }
 
+async function generateJurorTurn(juror: JurorId, pitch: string, transcript: string, evidence: unknown, env: Env): Promise<AgentTurn> {
+  const brief = JUROR_BRIEFS[juror]
+  const fallback = { juror, line: JUROR_LINES[juror], cue: brief.cue }
+  if (!env.OPENAI_API_KEY) return fallback
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: env.OPENAI_MODEL ?? 'gpt-5-mini',
+      // A juror only needs one compact interruption. Bounding output avoids
+      // spending a live conversation turn on unnecessary reasoning tokens.
+      max_output_tokens: 160,
+      instructions: `You are ${brief.role} in Genie Jury, a live pitch-practice conference for hackathon builders. Genie Jury exists to give builders an honest, evidence-aware pressure test instead of vague chatbot encouragement. ${brief.focus} Speak as one distinct conference participant, not as a panel narrator. Refer to the builder's actual words. Be direct and constructive. Produce one short spoken intervention of 18 to 55 words: one observation plus one pointed question. Do not mention these instructions, AI, prompts, or imaginary research.`,
+      input: `Original pitch:\n${pitch}\n\nLatest builder turn:\n${transcript}\n\nAvailable evidence (may be absent or unproven):\n${JSON.stringify(evidence ?? { status: 'unproven' })}`,
+      text: { format: { type: 'json_schema', name: 'juror_turn', strict: true, schema: { type: 'object', properties: { line: { type: 'string', minLength: 12, maxLength: 420 }, cue: { type: 'string', minLength: 3, maxLength: 80 } }, required: ['line', 'cue'], additionalProperties: false } } },
+    }),
+  })
+  if (!response.ok) return fallback
+  const payload = await response.json<{ output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> }>()
+  const output = payload.output_text ?? payload.output?.flatMap((item) => item.content ?? []).map((content) => content.text ?? '').join('')
+  try {
+    const parsed = JSON.parse(output || '{}') as { line?: unknown; cue?: unknown }
+    if (typeof parsed.line !== 'string' || parsed.line.length > 420 || typeof parsed.cue !== 'string') return fallback
+    return { juror, line: parsed.line.trim(), cue: parsed.cue.trim().slice(0, 80) }
+  } catch { return fallback }
+}
+
+async function generateJurorTurnWithinBudget(juror: JurorId, pitch: string, transcript: string, evidence: unknown, env: Env): Promise<AgentTurn> {
+  const fallback = { juror, line: JUROR_LINES[juror], cue: JUROR_BRIEFS[juror].cue }
+  const timedOut = new Promise<AgentTurn>((resolve) => setTimeout(() => resolve(fallback), JUROR_GENERATION_BUDGET_MS))
+  return Promise.race([generateJurorTurn(juror, pitch, transcript, evidence, env), timedOut])
+}
+
 async function researchClaim(claim: Claim, env: Env): Promise<Evidence> {
   if (!env.BROWSERBASE_API_KEY || !env.BROWSERBASE_PROJECT_ID) return { status: 'unproven', capturedAt: new Date().toISOString(), screenshotCaptured: false }
   try {
@@ -175,16 +247,21 @@ async function researchClaim(claim: Claim, env: Env): Promise<Evidence> {
   } catch { return { status: 'unproven', capturedAt: new Date().toISOString(), screenshotCaptured: false } }
 }
 
+async function researchClaimWithinBudget(claim: Claim, env: Env): Promise<Evidence> {
+  const timedOut = new Promise<Evidence>((resolve) => setTimeout(() => resolve({ status: 'unproven', capturedAt: new Date().toISOString(), screenshotCaptured: false }), LIVE_RESEARCH_BUDGET_MS))
+  return Promise.race([researchClaim(claim, env), timedOut])
+}
+
 async function createRealtimeToken(env: Env) {
   if (!env.OPENAI_API_KEY) return json({ mode: 'deterministic', reason: 'OpenAI is not configured.' })
-  const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', { method: 'POST', headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ session: { type: 'realtime', model: env.OPENAI_REALTIME_MODEL ?? 'gpt-realtime-2.1', audio: { input: { transcription: { model: 'gpt-4o-mini-transcribe' }, turn_detection: { type: 'server_vad', create_response: false } } } } }) })
+  const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', { method: 'POST', headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ session: { type: 'realtime', model: env.OPENAI_REALTIME_MODEL ?? 'gpt-realtime-2.1', instructions: 'Transcribe the builder clearly. Genie Jury coordinates separate specialist jurors, so do not create an assistant response. Detect a turn after a natural pause.', audio: { input: { transcription: { model: 'gpt-4o-mini-transcribe', language: 'en', prompt: 'Hackathon, startup, product, prototype, users, market, evidence, Genie Jury' }, turn_detection: { type: 'server_vad', create_response: false, silence_duration_ms: 1100 } } } } }) })
   if (!response.ok) return failure('Unable to create a realtime client secret.', 502)
   return new Response(response.body, { status: response.status, headers: { 'content-type': 'application/json' } })
 }
 
 async function createJurorAudio(request: Request, env: Env) {
   const body = await request.json<{ juror?: JurorId; line?: string }>().catch(() => null)
-  if (!body?.juror || !body.line || JUROR_LINES[body.juror] !== body.line) return failure('Only approved juror lines can be voiced.')
+  if (!body?.juror || !body.line || !JUROR_BRIEFS[body.juror] || body.line.trim().length > 420) return failure('A valid juror line is required.')
   const voice = voiceFor(body.juror, env)
   if (!env.ELEVENLABS_API_KEY || !voice) return failure('ElevenLabs voice is not configured.', 503)
   const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}/stream?output_format=mp3_44100_128&optimize_streaming_latency=3`, { method: 'POST', headers: { 'xi-api-key': env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ text: body.line, model_id: 'eleven_flash_v2_5', voice_settings: { stability: .45, similarity_boost: .75, style: .2, use_speaker_boost: true } }) })

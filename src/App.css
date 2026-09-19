@@ -427,12 +427,12 @@
 }
 .pitch-stage .juror-ember,
 .pitch-stage .juror-volt {
-  bottom: -13%;
+  bottom: 6%;
   width: min(44vw, 600px);
 }
 .pitch-stage .juror-gale,
 .pitch-stage .juror-tide {
-  bottom: 18%;
+  bottom: 28%;
   width: min(35vw, 470px);
 }
 .pitch-stage .juror-gale {
@@ -650,12 +650,13 @@
   }
   .pitch-stage .juror-ember,
   .pitch-stage .juror-volt {
-    bottom: -2%;
+    /* Keep each cloud entirely above the compact phone cue strip. */
+    bottom: 32%;
     width: 62vw;
   }
   .pitch-stage .juror-gale,
   .pitch-stage .juror-tide {
-    bottom: 26%;
+    bottom: 54%;
     width: 49vw;
   }
   .pitch-stage .juror-gale {
@@ -666,9 +667,17 @@
   }
   .voice-cue {
     bottom: 16px;
+    padding: 10px 12px 11px;
+    width: calc(100% - 28px);
   }
+  .cue-body { gap: 8px; }
   .cue-body p {
     font-size: 12px;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    display: -webkit-box;
+    margin-top: 6px;
+    overflow: hidden;
   }
   .ready-card {
     padding: 33px 26px;

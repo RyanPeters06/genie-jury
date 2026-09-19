@@ -1,6 +1,7 @@
 export type RemoteSession = { id: string; stage: string }
 export type ConnectionState = 'checking' | 'connected' | 'demo-fallback' | 'service-unavailable'
 export type JurorId = 'ember' | 'gale' | 'tide' | 'volt'
+export type JurorTurn = { juror: JurorId; line: string; cue: string }
 
 const apiBase = import.meta.env.VITE_JURY_API_URL?.replace(/\/$/, '')
 
@@ -33,6 +34,12 @@ export async function requestResearch(sessionId: string): Promise<void> {
   if (!apiBase) return
   const response = await request(`/sessions/${sessionId}/research`, { method: 'POST' })
   if (!response.ok) throw new Error('The Skeptic could not start research.')
+}
+
+export async function requestJurorTurn(sessionId: string, juror: JurorId, transcript: string): Promise<JurorTurn> {
+  const response = await request(`/sessions/${sessionId}/turn`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ juror, transcript }) })
+  if (!response.ok) throw new Error('The Jury could not prepare a response.')
+  return response.json() as Promise<JurorTurn>
 }
 
 export async function requestRealtimeSecret(sessionId: string): Promise<string | null> {

@@ -8,7 +8,7 @@ import tideListening from './assets/jurors/tide-listening.png'
 import tideSpeaking from './assets/jurors/tide-speaking.png'
 import voltListening from './assets/jurors/volt-listening.png'
 import voltSpeaking from './assets/jurors/volt-speaking.png'
-import { appendFinalTranscript, createRemoteSession, getConnectionState, requestJurorAudio, requestRealtimeSecret, requestResearch } from './lib/jury-api'
+import { createRemoteSession, getConnectionState, requestJurorAudio, requestJurorTurn, requestRealtimeSecret } from './lib/jury-api'
 import type { ConnectionState } from './lib/jury-api'
 import './App.css'
 import './intro-layout.css'
@@ -47,6 +47,8 @@ function App() {
   const [mode, setMode] = useState<'Hackathon' | 'Startup'>('Hackathon')
   const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null)
   const [connection, setConnection] = useState<ConnectionState>('checking')
+  const [jurorLine, setJurorLine] = useState(JURORS[0].line)
+  const [jurorCue, setJurorCue] = useState(JURORS[0].cue)
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const advanceTimer = useRef<number | null>(null)
   const manualRecognitionStop = useRef(false)
@@ -54,6 +56,8 @@ function App() {
   const microphoneStreamRef = useRef<MediaStream | null>(null)
   const jurorAudioRef = useRef<HTMLAudioElement | null>(null)
   const jurorAudioUrlRef = useRef<string | null>(null)
+  const transcriptRef = useRef('')
+  const submittingTurnRef = useRef(false)
   const activeJuror = JURORS[activeIndex]
   const caseName = useMemo(() => pitch.match(/^\s*([A-Z][\w\s'-]{2,35}?)(?:\s+is|\s+helps|\s+lets|:)/)?.[1]?.trim() || 'Your idea', [pitch])
 
@@ -65,7 +69,7 @@ function App() {
       if (event.code === 'Space' && ['mic-ready', 'awaiting-answer'].includes(stage)) {
         event.preventDefault()
         if (stage === 'mic-ready') void beginVoicePitch()
-        else advanceJury()
+        else beginBuilderResponse()
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -119,8 +123,23 @@ function App() {
       events.addEventListener('message', (event) => {
         try {
           const payload = JSON.parse(event.data)
-          if (payload.type === 'conversation.item.input_audio_transcription.delta' && payload.delta) setTranscript((current) => `${current}${payload.delta}`)
-          if (payload.type === 'conversation.item.input_audio_transcription.completed' && payload.transcript) setTranscript(payload.transcript)
+          if (payload.type === 'conversation.item.input_audio_transcription.delta' && payload.delta) {
+            transcriptRef.current = `${transcriptRef.current}${payload.delta}`
+            setTranscript(transcriptRef.current)
+          }
+          if (payload.type === 'conversation.item.input_audio_transcription.completed' && payload.transcript) {
+            transcriptRef.current = payload.transcript
+            setTranscript(payload.transcript)
+          }
+          if (payload.type === 'input_audio_buffer.speech_started' && advanceTimer.current) {
+            window.clearTimeout(advanceTimer.current)
+            advanceTimer.current = null
+          }
+          if (payload.type === 'input_audio_buffer.speech_stopped' && !manualRecognitionStop.current) {
+            advanceTimer.current = window.setTimeout(() => {
+              if (transcriptRef.current.trim() && !manualRecognitionStop.current) endVoicePitch()
+            }, 650)
+          }
         } catch { /* The browser speech fallback remains available. */ }
       })
       const offer = await peer.createOffer()
@@ -130,6 +149,7 @@ function App() {
       await peer.setRemoteDescription({ type: 'answer', sdp: await response.text() })
       realtimePeerRef.current = peer
       manualRecognitionStop.current = false
+      transcriptRef.current = ''
       setTranscript('')
       setStage('user-speaking')
       return true
@@ -148,14 +168,16 @@ function App() {
       recognition.onresult = (event) => {
         let words = ''
         for (let index = event.resultIndex; index < event.results.length; index += 1) words += event.results[index][0].transcript
-        setTranscript((current) => `${current} ${words}`.trim())
+        transcriptRef.current = `${transcriptRef.current} ${words}`.trim()
+        setTranscript(transcriptRef.current)
       }
       recognition.onerror = () => setStage('text-fallback')
       recognition.onend = () => {
-        if (!manualRecognitionStop.current) startDeliberation()
+        if (!manualRecognitionStop.current) submitBuilderTurn()
       }
       recognitionRef.current = recognition
       manualRecognitionStop.current = false
+      transcriptRef.current = ''
       setTranscript('')
       setStage('user-speaking')
       recognition.start()
@@ -166,7 +188,7 @@ function App() {
     manualRecognitionStop.current = true
     recognitionRef.current?.stop()
     stopInputCapture()
-    startDeliberation()
+    submitBuilderTurn()
   }
 
   function stopInputCapture() {
@@ -184,51 +206,51 @@ function App() {
     window.speechSynthesis?.cancel()
   }
 
-  async function playJurorLine(juror: Juror) {
+  async function playJurorLine(juror: Juror, line: string, sessionId = remoteSessionId) {
     stopJurorAudio()
-    if (muted || !remoteSessionId) { speak(juror.line, juror); return }
+    if (muted || !sessionId) { speak(line, juror); return }
     try {
-      const blob = await requestJurorAudio(remoteSessionId, juror.id, juror.line)
+      const blob = await requestJurorAudio(sessionId, juror.id, line)
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
       jurorAudioUrlRef.current = url
       jurorAudioRef.current = audio
       audio.onended = () => stopJurorAudio()
       await audio.play()
-    } catch { speak(juror.line, juror) }
+    } catch { speak(line, juror) }
   }
 
-  function startDeliberation() {
+  async function submitBuilderTurn() {
+    if (submittingTurnRef.current) return
+    submittingTurnRef.current = true
     recognitionRef.current?.stop()
     stopInputCapture()
-    setActiveIndex(1)
-    setStage('researching')
-    void beginRemoteResearch(transcript || pitch)
-    advanceTimer.current = window.setTimeout(() => {
-      setStage('juror-speaking')
-      window.setTimeout(() => { void playJurorLine(JURORS[1]) }, 140)
-    }, 1400)
-  }
-
-  async function beginRemoteResearch(casePitch: string) {
+    const builderTurn = transcriptRef.current.trim() || transcript.trim() || pitch
+    const juror = JURORS[activeIndex]
+    setStage(juror.id === 'gale' ? 'researching' : 'juror-speaking')
     try {
-      const sessionId = remoteSessionId ?? await ensureRemoteSession(casePitch)
-      if (!sessionId) return
-      await appendFinalTranscript(sessionId, casePitch)
-      await requestResearch(sessionId)
+      const sessionId = remoteSessionId ?? await ensureRemoteSession(pitch)
+      if (!sessionId) throw new Error('No remote session')
+      const turn = await requestJurorTurn(sessionId, juror.id, builderTurn)
+      setJurorLine(turn.line)
+      setJurorCue(turn.cue)
+      setStage('juror-speaking')
+      await playJurorLine(juror, turn.line, sessionId)
     } catch {
       setConnection('service-unavailable')
+      setJurorLine(juror.line)
+      setJurorCue(juror.cue)
+      setStage('juror-speaking')
+      await playJurorLine(juror, juror.line)
+    } finally {
+      submittingTurnRef.current = false
     }
   }
 
-  function advanceJury() {
+  function beginBuilderResponse() {
     if (activeIndex === JURORS.length - 1) { finishSession(); return }
-    const nextIndex = activeIndex + 1
-    setActiveIndex(nextIndex)
-    setStage('juror-speaking')
-    window.setTimeout(() => {
-      void playJurorLine(JURORS[nextIndex])
-    }, 120)
+    setActiveIndex((index) => index + 1)
+    void beginVoicePitch()
   }
 
   function finishSession() {
@@ -243,9 +265,9 @@ function App() {
     setStage('verdict')
   }
 
-  const submitTextPitch = (event: FormEvent) => { event.preventDefault(); setTranscript(pitch); startDeliberation() }
-  const stageStatus = stage === 'user-speaking' ? 'YOUR TURN — WE ARE LISTENING' : stage === 'researching' ? 'GALE IS GATHERING RECEIPTS' : stage === 'juror-speaking' ? `${activeJuror.name.toUpperCase()} IS SPEAKING` : stage === 'awaiting-answer' ? 'YOUR RESPONSE' : 'THE JURY IS READY'
-  const stageLine = stage === 'user-speaking' ? (transcript || 'Pitch your idea. We will not interrupt you yet.') : stage === 'researching' ? 'Separating your claims from your assumptions…' : stage === 'juror-speaking' ? activeJuror.line : stage === 'awaiting-answer' ? 'Space continues to the next juror.' : 'Press space to begin your pitch.'
+  const submitTextPitch = (event: FormEvent) => { event.preventDefault(); transcriptRef.current = pitch; setTranscript(pitch); void submitBuilderTurn() }
+  const stageStatus = stage === 'user-speaking' ? 'YOUR TURN — WE ARE LISTENING' : stage === 'researching' ? 'GALE IS GATHERING RECEIPTS' : stage === 'juror-speaking' ? `${activeJuror.name.toUpperCase()} — ${jurorCue.toUpperCase()}` : stage === 'awaiting-answer' ? 'YOUR RESPONSE' : 'THE JURY IS READY'
+  const stageLine = stage === 'user-speaking' ? (transcript || 'Pitch your idea. The jury will answer when you finish.') : stage === 'researching' ? 'Gale is checking your highest-risk claim against live evidence…' : stage === 'juror-speaking' ? jurorLine : stage === 'awaiting-answer' ? 'Space continues to the next juror.' : 'Press space to begin your pitch.'
 
   return <main className={`app day-sky stage-${stage}`} style={{ '--active-accent': activeJuror.accent } as CSSProperties}>
     <Cloudscape />
@@ -266,7 +288,7 @@ function App() {
     {['user-speaking', 'researching', 'juror-speaking', 'awaiting-answer'].includes(stage) && <section className="pitch-stage">
       <div className="stage-top"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><div className="stage-actions"><span>{mode} MODE · {caseName}</span><button className="end-session" onClick={finishSession}>END SESSION</button></div></div>
       <JurySky activeIndex={stage === 'user-speaking' ? -1 : activeIndex} talkingIndex={stage === 'juror-speaking' ? activeIndex : -1} onJurorSelect={(index) => { if (stage !== 'user-speaking') { setActiveIndex(index); setStage('juror-speaking') } }} />
-      <div className="voice-cue" aria-live="polite"><div className="cue-label"><span className={`live-dot ${stage === 'user-speaking' ? 'recording' : ''}`} />{stageStatus}<span className="connection-state">{connection === 'connected' ? 'CONNECTED' : connection === 'checking' ? 'CHECKING' : connection === 'demo-fallback' ? 'DEMO FALLBACK' : 'SERVICE UNAVAILABLE'}</span><button onClick={() => { stopJurorAudio(); setMuted((current) => !current) }} aria-label={muted ? 'Unmute jury voices' : 'Mute jury voices'}>{muted ? 'UNMUTE' : 'MUTE'}</button></div><div className="cue-body"><div className="wave" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div><p>{stageLine}</p>{stage === 'user-speaking' && <button className="end-pitch" onClick={endVoicePitch}>I’M DONE <i>→</i></button>}{stage === 'juror-speaking' && <button className="end-pitch" onClick={() => setStage('awaiting-answer')}>CONTINUE <i>→</i></button>}{stage === 'awaiting-answer' && <button className="end-pitch" onClick={advanceJury}>{activeIndex === 3 ? 'HEAR VERDICT' : 'NEXT JUROR'} <i>→</i></button>}</div></div>
+      <div className="voice-cue" aria-live="polite"><div className="cue-label"><span className={`live-dot ${stage === 'user-speaking' ? 'recording' : ''}`} />{stageStatus}<span className="connection-state">{connection === 'connected' ? 'CONNECTED' : connection === 'checking' ? 'CHECKING' : connection === 'demo-fallback' ? 'DEMO FALLBACK' : 'SERVICE UNAVAILABLE'}</span><button onClick={() => { stopJurorAudio(); setMuted((current) => !current) }} aria-label={muted ? 'Unmute jury voices' : 'Mute jury voices'}>{muted ? 'UNMUTE' : 'MUTE'}</button></div><div className="cue-body"><div className="wave" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div><p>{stageLine}</p>{stage === 'user-speaking' && <button className="end-pitch" onClick={endVoicePitch}>I’M DONE <i>→</i></button>}{stage === 'juror-speaking' && <button className="end-pitch" onClick={beginBuilderResponse}>{activeIndex === 3 ? 'HEAR VERDICT' : 'YOUR RESPONSE'} <i>→</i></button>}</div></div>
     </section>}
 
     {stage === 'verdict' && <section className="verdict-screen"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><div className="verdict-copy"><p>THE JURY’S VERDICT</p><h2>{caseName} has<br /><em>a pulse.</em></h2><span>The jury found a version worth building. Keep the pressure; cut the platform.</span><div className="ally-note"><b>THE ALLY SAYS</b><h3>Build the 90-second moment.</h3><p>Make Gale interrupt with a real receipt, then show how the user can pivot. That is the demo people will remember.</p></div><div className="vote-row">{JURORS.map((juror) => <span key={juror.id} style={{ '--vote-color': juror.accent } as React.CSSProperties}><b>{juror.name}</b>{juror.verdict}</span>)}</div><button className="sun-button" onClick={() => { setActiveIndex(0); setStage('intro') }}>TRY ANOTHER IDEA <i>→</i></button></div><JurySky activeIndex={1} onJurorSelect={setActiveIndex} subdued /></section>}

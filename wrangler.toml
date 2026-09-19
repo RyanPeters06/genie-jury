@@ -3,7 +3,9 @@ main = "worker/index.ts"
 compatibility_date = "2026-09-19"
 
 [vars]
-OPENAI_MODEL = "gpt-5.6"
+# A fast structured-output model keeps a spoken jury turn responsive. This
+# remains overrideable in ignored local environment configuration.
+OPENAI_MODEL = "gpt-4.1-mini"
 
 [[durable_objects.bindings]]
 name = "JURY_SESSIONS"
