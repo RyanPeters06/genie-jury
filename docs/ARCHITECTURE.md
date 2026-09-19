@@ -1,35 +1,112 @@
-# Architecture — local and deploy-ready
+# Architecture
 
-## Runtime topology
+## Processes
 
-```text
-Vite browser (5173) -> local Jury Worker (8790) -> OpenAI / ElevenLabs
-                                           -> local research runner (8788) -> Browserbase
+```
+browser (Vite, 5174)
+  |  mic audio  ──────────────────────────────►  OpenAI Realtime (WebRTC, direct)
+  |  REST + Server-Sent Events
+  v
+jury API (Node, 8790)
+  ├─► OpenAI Responses      agents, tool loops, structured output
+  ├─► Browserbase           Search API, live browser sessions, Stagehand
+  └─► ElevenLabs            one streamed juror voice at a time
 ```
 
-The Worker owns sessions, validates requests, protects provider credentials, and normalizes evidence. The research runner is a local Node process because Browserbase cloud-browser control uses CDP/Playwright and does not belong in the browser or an edge-only runtime. Nothing in this repository is publicly deployed by default.
+Two processes, no build step on the server: Node runs the TypeScript directly.
 
-## Provider responsibilities
+Microphone audio never touches the jury API. The browser holds a short-lived
+client secret minted server-side and streams audio straight to OpenAI over
+WebRTC; only finalised text comes back through the app. The API keeps no audio
+and no raw recordings.
 
-| Provider | Purpose | Client exposure |
-| --- | --- | --- |
-| OpenAI Realtime | Builder transcription through a short-lived token. | Ephemeral token only. |
-| OpenAI Responses | Strict claim extraction and juror deliberation. | Never exposes the key. |
-| Browserbase | Gale's live research browser and evidence capture. | Only normalized evidence. |
-| ElevenLabs | One streamed juror voice at a time. | Proxied audio only. |
+## Why a single Node process
 
-## Environment boundaries
+The live browser session, the agent driving it, and the event stream the stage
+subscribes to live in one Node process. That is what makes the Browserbase live
+view on stage possible while keeping provider credentials off the client.
 
-`VITE_JURY_API_URL` is the only browser-visible configuration. `OPENAI_API_KEY`, `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `ELEVENLABS_API_KEY`, voice IDs, and local-runner settings belong in ignored `.dev.vars`. No raw microphone audio is sent to or stored by the Worker; finalized text is the only transcript payload retained in a session.
+## Session lifecycle
 
-## API contract
+A session is one pitch. It holds the transcript, the deliberation ledger, the
+interjection budget, the event history, and the Browserbase browser. Sessions
+live in memory for six hours and are released explicitly when the verdict lands.
 
-- `GET /health` reports Worker availability.
-- `GET /health/services` reports safe service states without values or keys.
-- `POST /sessions` creates a short-lived pitch session.
-- `POST /sessions/:id/events` accepts finalized transcript and stage events.
-- `POST /sessions/:id/realtime-token` mints a short-lived OpenAI token.
-- `POST /sessions/:id/research` returns normalized claim and evidence data.
-- `POST /sessions/:id/juror-audio` streams validated ElevenLabs audio for one approved juror line.
+| Route | Purpose |
+| --- | --- |
+| `GET /health`, `GET /health/services` | availability, and which providers are configured (never values) |
+| `GET /jurors` | the cast and their mandates |
+| `POST /sessions` | start a pitch |
+| `GET /sessions/:id/stream` | Server-Sent Events: every agent step, message, tool call, and browser event |
+| `POST /sessions/:id/realtime-token` | mint a short-lived OpenAI transcription secret |
+| `POST /sessions/:id/interject` | decide whether a juror cuts into the pitch right now |
+| `POST /sessions/:id/deliberate` | run the whole swarm |
+| `POST /sessions/:id/respond` | the builder answered a juror; that juror replies |
+| `POST /sessions/:id/juror-audio` | stream one juror line as speech |
+| `POST /sessions/:id/finish` | release the browser and close the session |
 
-Sessions retain final pitch text, event history, structured claims, and normalized evidence. They never retain raw audio, credentials, or full Browserbase connection URLs.
+## The live event stream
+
+Everything the swarm does is emitted as it happens: run-tree nodes opening and
+closing, findings posted, evidence added, messages between agents, and every
+browser action. The stage subscribes once and drives three things from it: the
+Browserbase dock, the jury room trace, and the jurors speaking as soon as their
+turn is ready rather than when the whole run finishes.
+
+Events are numbered and replayed on reconnect, so a dropped connection mid-demo
+catches up instead of losing the session.
+
+## Browserbase
+
+Three capabilities, chosen per agent:
+
+- **Search API** — real titles and URLs for a query. Fast enough for any agent
+  to use freely, about 0.4s.
+- **Live browser session** — a cloud Chrome the audience watches through its
+  live-view URL, embedded on stage. Used to open a source, read it, and
+  screenshot it. About 3s to open, 2s per page.
+- **Stagehand** — natural-language actions on the open page when the answer is
+  behind a click: dismiss the cookie wall, open pricing, expand the reviews.
+
+When an OpenAI key is present the session is launched by Stagehand so its
+extension is installed and actions work. Without one, the session is created
+through the REST API and driven over CDP instead, which still gives the live
+view, the page text, and screenshots. The jurors share one browser and their use
+of it is serialised, so the live view always shows one coherent story.
+
+## Voices
+
+Each juror has its own ElevenLabs voice and its own delivery profile: stability,
+similarity, style, and speed tuned to the personality. Lines are written for
+Eleven v3, which performs inline audio tags such as `[laughs]` and `[pauses]`.
+Jurors may only use tags from their own whitelist, at most two per line, and
+anything else in brackets is stripped before the text reaches the API. If v3 is
+unavailable the request falls back to Multilingual v2 with the tags removed, so
+the jury never goes silent.
+
+Eleven v3 requests deliberately omit `previous_text` and `next_text`: that
+model rejects both fields. If the fallback v2 model is used, the server may pass
+them after stripping delivery tags.
+
+## Failure behaviour
+
+The stage must never hang and must never claim evidence it does not have.
+
+- Every browser operation races a deadline, so a page that never settles is
+  abandoned rather than waited on. Without this one hung page blocks the queue
+  the jurors share and freezes the whole panel.
+- Every model call has a request timeout and a deterministic fallback.
+- The investigation stage has a hard deadline; if it overruns, the jury speaks
+  from what is already on the ledger.
+- With no keys at all, the full flow still runs end to end on scripted findings
+  and the browser's own speech synthesis.
+- A failed juror audio request falls back to browser speech rather than silence.
+
+## Security boundaries
+
+`VITE_JURY_API_URL` is the only browser-visible configuration. API keys live in
+ignored `.env.local` and never leave the server. The API allows only the local
+dev origins plus an explicit `PUBLIC_APP_ORIGIN`. Juror audio requests are
+bounded in length and restricted to known jurors. Browserbase session IDs are
+exposed to the stage only as the live-view URL needed to render the iframe, and
+sessions are explicitly released when the verdict lands.

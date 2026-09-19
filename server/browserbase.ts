@@ -50,6 +50,27 @@ const headers = (env: Env) => ({ 'Content-Type': 'application/json', 'X-BB-API-K
 const now = () => new Date().toISOString()
 const SESSION_TIMEOUT_S = 300
 
+/**
+ * Nothing on stage may hang. Every browser operation races a deadline, because
+ * a page that never settles would otherwise block the shared queue and freeze
+ * the whole deliberation while an audience watches.
+ */
+const OPEN_MS = 25000
+const CAPTURE_MS = 28000
+const ACT_MS = 30000
+
+class TimeoutError extends Error {
+  constructor(what: string, ms: number) { super(`${what} timed out after ${ms}ms`) }
+}
+
+function withTimeout<T>(what: string, ms: number, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>
+  return Promise.race([
+    work,
+    new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new TimeoutError(what, ms)), ms) }),
+  ]).finally(() => clearTimeout(timer)) as Promise<T>
+}
+
 // ---------------------------------------------------------------------------
 // Search API
 // ---------------------------------------------------------------------------
@@ -108,14 +129,14 @@ export class LiveBrowser {
   get mode(): 'stagehand' | 'playwright' | 'closed' { return this.stagehand ? 'stagehand' : this.connectUrl ? 'playwright' : 'closed' }
 
   /** Jurors share one browser; serialise their use of it. */
-  private locked<T>(work: () => Promise<T>): Promise<T> {
-    const next = this.queue.then(work, work)
+  private locked<T>(label: string, ms: number, work: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(() => withTimeout(label, ms, work()), () => withTimeout(label, ms, work()))
     this.queue = next.catch(() => undefined)
     return next
   }
 
   async open() {
-    return this.locked(async () => {
+    return this.locked('browser.open', OPEN_MS, async () => {
       if (this.sessionId) return this
       const { env } = this.ctx
       if (!browserbaseConfigured(env)) throw new Error('Browserbase is not configured')
@@ -124,8 +145,8 @@ export class LiveBrowser {
       if (env.OPENAI_API_KEY) {
         try {
           const { Stagehand, browserbase } = await import('@browserbasehq/stagehand')
-          this.stagehandBrowser = await browserbase.launch({ apiKey: env.BROWSERBASE_API_KEY!, ...sessionParams })
-          this.stagehand = await Stagehand.create({ browser: this.stagehandBrowser, apiKey: env.BROWSERBASE_API_KEY, model: { modelName: `openai/${env.OPENAI_FAST_MODEL}` as 'openai/gpt-5-mini', apiKey: env.OPENAI_API_KEY }, systemPrompt: 'You are Gale, a skeptical researcher gathering evidence for a pitch jury. Be efficient; dismiss popups and cookie banners without hesitation.' })
+          this.stagehandBrowser = await withTimeout('stagehand.launch', 15000, browserbase.launch({ apiKey: env.BROWSERBASE_API_KEY!, ...sessionParams }))
+          this.stagehand = await withTimeout('stagehand.create', 15000, Stagehand.create({ browser: this.stagehandBrowser, apiKey: env.BROWSERBASE_API_KEY, model: { modelName: `openai/${env.OPENAI_FAST_MODEL}` as 'openai/gpt-5-mini', apiKey: env.OPENAI_API_KEY }, systemPrompt: 'You are Gale, a skeptical researcher gathering evidence for a pitch jury. Be efficient; dismiss popups and cookie banners without hesitation.' }))
           this.sessionId = this.stagehandBrowser.sessionId ?? null
         } catch (error) {
           this.ctx.emit({ type: 'browser.error', at: now(), agent: this.ctx.agent, data: { step: 'stagehand.launch', error: String(error) } })
@@ -163,17 +184,17 @@ export class LiveBrowser {
   }
 
   async capture(url: string, options: { screenshot?: boolean; waitMs?: number } = {}): Promise<PageCapture> {
-    return this.locked(async () => {
+    return this.locked('browser.capture', CAPTURE_MS, async () => {
       const page = await this.page()
       this.ctx.emit({ type: 'browser.navigate', at: now(), agent: this.ctx.agent, data: { url } })
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 })
-      await page.waitForTimeout(options.waitMs ?? 900)
-      const finalUrl = await page.url()
-      const title = (await page.title().catch(() => '')) || url
+      await withTimeout<unknown>('goto', 20000, page.goto(url, { waitUntil: 'domcontentloaded', timeout: 18000 }))
+      await page.waitForTimeout(options.waitMs ?? 900).catch(() => undefined)
+      const finalUrl = await withTimeout('url', 5000, Promise.resolve(page.url())).catch(() => url)
+      const title = await withTimeout('title', 5000, Promise.resolve(page.title())).catch(() => '') || url
       const excerpt = await this.readPageText(page)
       let screenshotDataUrl: string | undefined
       if (options.screenshot !== false) {
-        const shot = await this.screenshot(page)
+        const shot = await withTimeout('screenshot', 12000, this.screenshot(page)).catch(() => null)
         if (shot) {
           screenshotDataUrl = `data:image/${shot.type};base64,${Buffer.from(shot.data).toString('base64')}`
           this.ctx.emit({ type: 'browser.screenshot', at: now(), agent: this.ctx.agent, data: { url: finalUrl, title, screenshotDataUrl } })
@@ -187,7 +208,7 @@ export class LiveBrowser {
   private async readPageText(page: StagehandPage | PlaywrightPage): Promise<string> {
     const script = 'JSON.stringify((document.querySelector("main, article, [role=\\"main\\"]") || document.body || {}).textContent || "")'
     try {
-      const raw = await (page as { evaluate: (expression: string) => Promise<unknown> }).evaluate(script)
+      const raw = await withTimeout('evaluate', 8000, (page as { evaluate: (expression: string) => Promise<unknown> }).evaluate(script))
       const text = typeof raw === 'string' ? (JSON.parse(raw) as string) : ''
       return text.replace(/\s+/g, ' ').trim().slice(0, 2400)
     } catch { return '' }
@@ -200,7 +221,7 @@ export class LiveBrowser {
 
   /** Natural-language action on the current page via Stagehand (same session, so the live view shows it). */
   async act(instruction: string): Promise<{ ok: boolean; message: string }> {
-    return this.locked(async () => {
+    return this.locked('browser.act', ACT_MS, async () => {
       if (!this.stagehand) return { ok: false, message: 'Stagehand is not available in this session.' }
       try {
         const result = await this.stagehand.act(instruction)
@@ -216,7 +237,7 @@ export class LiveBrowser {
 
   /** Extraction from the current page via Stagehand. */
   async extract(instruction: string): Promise<{ answer: string; quotes: string[] } | null> {
-    return this.locked(async () => {
+    return this.locked('browser.extract', ACT_MS, async () => {
       if (!this.stagehand) return null
       try {
         const result = await this.stagehand.extract(`${instruction}. Answer in two parts: the answer, then up to three short verbatim quotes from the page, each on its own line prefixed with "QUOTE:".`)
@@ -233,7 +254,7 @@ export class LiveBrowser {
   }
 
   async close() {
-    await this.locked(async () => {
+    await this.locked('browser.close', 15000, async () => {
       const sessionId = this.sessionId
       await this.stagehand?.close().catch(() => undefined)
       await this.stagehandBrowser?.close().catch(() => undefined)

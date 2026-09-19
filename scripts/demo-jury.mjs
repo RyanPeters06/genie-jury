@@ -6,7 +6,7 @@
  *
  *   node scripts/demo-jury.mjs ["your pitch here"]
  */
-const base = process.env.JURY_API_URL ?? 'http://127.0.0.1:8791'
+const base = process.env.JURY_API_URL ?? 'http://127.0.0.1:8790'
 const pitch = process.argv[2] ?? 'Genie Jury is a live pitch arena for hackathon builders. Nobody else does this. Four AI jurors interrupt your pitch, research your claims in a real browser, and give you the smallest next thing to build. Every hackathon team needs it.'
 
 const started = Date.now()
