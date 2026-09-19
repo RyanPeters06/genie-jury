@@ -13,14 +13,14 @@ from rembg import new_session, remove
 
 
 SPRITES = {
-    "ember-listening": (42, 148, 390, 552),
-    "tide-listening": (415, 148, 766, 552),
-    "gale-listening": (799, 148, 1166, 552),
-    "volt-listening": (1158, 154, 1532, 552),
-    "ember-speaking": (35, 586, 384, 976),
-    "tide-speaking": (418, 586, 772, 976),
-    "gale-speaking": (800, 586, 1164, 976),
-    "volt-speaking": (1152, 586, 1524, 976),
+    "ember-listening": (25, 96, 260, 370),
+    "tide-listening": (270, 95, 510, 370),
+    "gale-listening": (520, 93, 755, 370),
+    "volt-listening": (758, 102, 997, 370),
+    "ember-speaking": (28, 394, 258, 648),
+    "tide-speaking": (270, 394, 508, 648),
+    "gale-speaking": (522, 394, 756, 648),
+    "volt-speaking": (758, 394, 997, 648),
 }
 
 

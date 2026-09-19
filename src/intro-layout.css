@@ -1,27 +1,82 @@
-/* The raster sprites have a taller, truer silhouette than the former SVGs. */
+/*
+ * The supplied sprite sheet is deliberately compact: each juror is a complete
+ * cloud-seated silhouette. Keep their formation compact too, so the scene
+ * feels like one jury convening rather than four separate floating stickers.
+ */
+
+/* Enter-the-jury scene: a balanced row beneath the invitation copy. */
 .intro-screen .juror-ember,
 .intro-screen .juror-volt {
-  bottom: -12%;
-  width: min(25vw, 350px);
+  bottom: -10%;
+  width: clamp(160px, 21vw, 300px);
 }
 
-.intro-screen .juror-ember { left: -2%; }
-.intro-screen .juror-volt { right: -2%; }
+.intro-screen .juror-ember { left: 2%; }
+.intro-screen .juror-volt { right: 2%; }
 
 .intro-screen .juror-gale,
 .intro-screen .juror-tide {
-  bottom: 3%;
-  width: min(19vw, 270px);
+  bottom: -6%;
+  width: clamp(140px, 18vw, 255px);
 }
 
-.intro-screen .juror-gale { left: 54%; }
-.intro-screen .juror-tide { right: 14%; }
+.intro-screen .juror-gale { left: 28%; }
+.intro-screen .juror-tide { right: 28%; }
+
+/* Pitch mode is intentionally more theatrical: outer jurors anchor the
+ * foreground while Gale and Tide rise together toward the centre. */
+.pitch-stage .juror-ember,
+.pitch-stage .juror-volt {
+  bottom: -13%;
+  width: clamp(280px, 34vw, 480px);
+}
+
+.pitch-stage .juror-ember { left: -2%; }
+.pitch-stage .juror-volt { right: -2%; }
+
+.pitch-stage .juror-gale,
+.pitch-stage .juror-tide {
+  bottom: 26%;
+  width: clamp(210px, 25vw, 350px);
+}
+
+.pitch-stage .juror-gale { left: 23%; }
+.pitch-stage .juror-tide { right: 23%; }
 
 @media (max-width: 760px) {
   .intro-screen .juror-ember,
-  .intro-screen .juror-volt { bottom: -3%; width: 47vw; }
+  .intro-screen .juror-volt {
+    bottom: -3%;
+    width: 43vw;
+  }
+
+  .intro-screen .juror-ember { left: -6%; }
+  .intro-screen .juror-volt { right: -6%; }
+
   .intro-screen .juror-gale,
-  .intro-screen .juror-tide { bottom: 18%; width: 35vw; }
-  .intro-screen .juror-gale { left: 16%; }
-  .intro-screen .juror-tide { right: 16%; }
+  .intro-screen .juror-tide {
+    bottom: 23%;
+    width: 35vw;
+  }
+
+  .intro-screen .juror-gale { left: 8%; }
+  .intro-screen .juror-tide { right: 8%; }
+
+  .pitch-stage .juror-ember,
+  .pitch-stage .juror-volt {
+    bottom: -7%;
+    width: 61vw;
+  }
+
+  .pitch-stage .juror-ember { left: -14%; }
+  .pitch-stage .juror-volt { right: -14%; }
+
+  .pitch-stage .juror-gale,
+  .pitch-stage .juror-tide {
+    bottom: 28%;
+    width: 47vw;
+  }
+
+  .pitch-stage .juror-gale { left: 1%; }
+  .pitch-stage .juror-tide { right: 1%; }
 }
