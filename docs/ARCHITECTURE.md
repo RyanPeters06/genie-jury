@@ -3,7 +3,7 @@
 ## Runtime topology
 
 ```text
-Vite browser (5173) -> local Jury Worker (8787) -> OpenAI / ElevenLabs
+Vite browser (5173) -> local Jury Worker (8790) -> OpenAI / ElevenLabs
                                            -> local research runner (8788) -> Browserbase
 ```
 

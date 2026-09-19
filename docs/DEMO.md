@@ -9,7 +9,14 @@ copy .dev.vars.example .dev.vars
 npm run dev:full
 ```
 
-Open `http://127.0.0.1:5173`. The app should show **CONNECTED** once the Worker health check succeeds. If a provider is missing, the interface remains usable and reports the fallback honestly.
+Open `http://127.0.0.1:5173`. The app should show **CONNECTED** once the Worker health check succeeds on port 8790. If a provider is missing, the interface remains usable and reports the fallback honestly.
+
+To run the opt-in provider verification (it consumes a small amount of API usage):
+
+```bash
+$env:LIVE_API_SMOKE=1
+npm run smoke:live
+```
 
 ## 90-second narrative
 

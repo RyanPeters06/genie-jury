@@ -1,0 +1,27 @@
+/* The raster sprites have a taller, truer silhouette than the former SVGs. */
+.intro-screen .juror-ember,
+.intro-screen .juror-volt {
+  bottom: -12%;
+  width: min(25vw, 350px);
+}
+
+.intro-screen .juror-ember { left: -2%; }
+.intro-screen .juror-volt { right: -2%; }
+
+.intro-screen .juror-gale,
+.intro-screen .juror-tide {
+  bottom: 3%;
+  width: min(19vw, 270px);
+}
+
+.intro-screen .juror-gale { left: 54%; }
+.intro-screen .juror-tide { right: 14%; }
+
+@media (max-width: 760px) {
+  .intro-screen .juror-ember,
+  .intro-screen .juror-volt { bottom: -3%; width: 47vw; }
+  .intro-screen .juror-gale,
+  .intro-screen .juror-tide { bottom: 18%; width: 35vw; }
+  .intro-screen .juror-gale { left: 16%; }
+  .intro-screen .juror-tide { right: 16%; }
+}

@@ -5,14 +5,21 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:full": "concurrently -k -n vite,worker,research -c cyan,magenta,yellow \"npm run dev\" \"npm run worker:dev\" \"npm run research:dev\"",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "worker:dev": "wrangler dev",
+    "worker:dev": "wrangler dev --local --port 8790",
     "worker:typecheck": "tsc -p worker/tsconfig.json",
-    "worker:deploy": "wrangler deploy"
+    "worker:deploy": "wrangler deploy",
+    "research:dev": "node research-runner/index.mjs",
+    "setup:browserbase": "node scripts/setup-browserbase.mjs",
+    "setup:elevenlabs": "node scripts/setup-elevenlabs.mjs",
+    "test": "vitest run",
+    "smoke:live": "node scripts/live-smoke.mjs"
   },
   "dependencies": {
+    "playwright-core": "^1.63.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
@@ -22,9 +29,11 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
     "oxlint": "^1.81.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
+    "vitest": "^5.0.1",
     "wrangler": "^4.135.0"
   }
 }
