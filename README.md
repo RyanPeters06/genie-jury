@@ -34,16 +34,15 @@ This is the difference between a fun roleplay and an honest decision tool.
 
 ### Milestone 1 — cinematic prototype ✅
 
-- Responsive React interface and original CSS-rendered genie characters.
-- Hackathon/startup mode, pitch intake, deliberation arena, juror sequencing, and verdict flow.
+- Responsive daytime-sky interface with four original illustrated, cloud-seated jurors.
+- Live microphone setup, browser speech-recognition path, typed fallback, juror speaker cues, and verdict flow.
 - A deterministic fallback scenario so the demo cannot fail if a sponsor API is slow.
 
-### Milestone 2 — evidence engine
+### Milestone 2 — evidence engine ✅ foundation
 
-- Use the OpenAI Responses API to extract testable claims from a pitch into structured JSON.
-- A Browserbase worker opens targeted searches and primary sources for the three most important claims.
-- Store a small evidence dossier: title, URL, source excerpt, capture time, confidence, and screenshot.
-- Give Gale only sourced findings; never let it invent competitors or market facts.
+- Cloudflare Worker routes create and retrieve sessions, trigger research, mint Realtime client secrets, and stream a normalized event history through Durable Objects.
+- The Worker calls OpenAI Structured Outputs when configured, then falls back to deterministic claim extraction when it is not.
+- Gale creates a tagged Browserbase session when Browserbase credentials are configured; the local demo remains usable without any sponsor keys.
 
 ### Milestone 3 — real Council coordination
 
@@ -67,6 +66,17 @@ For the Huawei submission, persist the agents' messages, evidence handoffs, and 
 - Deploy the orchestration runtime to Cloudflare Workers.
 - Use a Durable Object or D1 to retain the pitch, agent messages, evidence states, and final verdict for each session.
 - Add Sentry tracing/logs around research and model calls; keep a static demo scenario as a fallback.
+
+## Local backend setup
+
+```bash
+copy .dev.vars.example .dev.vars
+npm run worker:dev
+```
+
+Start the Vite app in another terminal with `npm run dev`. To have the browser call the Worker, copy `.env.example` to `.env.local` and leave `VITE_JURY_API_URL=http://127.0.0.1:8787`.
+
+`OPENAI_API_KEY`, `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, and `ELEVENLABS_API_KEY` belong only in `.dev.vars` or Worker secrets. The checked-in `wrangler.toml` deliberately leaves D1 and R2 bindings commented until their Cloudflare resources are created.
 
 ## Sponsor map
 

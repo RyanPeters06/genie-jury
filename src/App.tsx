@@ -4,6 +4,7 @@ import ember from './assets/jurors/ember.svg'
 import gale from './assets/jurors/gale.svg'
 import tide from './assets/jurors/tide.svg'
 import volt from './assets/jurors/volt.svg'
+import { createRemoteSession, requestResearch } from './lib/jury-api'
 import './App.css'
 
 type SessionStage = 'intro' | 'mic-ready' | 'text-fallback' | 'user-speaking' | 'researching' | 'juror-speaking' | 'awaiting-answer' | 'verdict'
@@ -37,6 +38,7 @@ function App() {
   const [activeIndex, setActiveIndex] = useState(0)
   const [muted, setMuted] = useState(false)
   const [mode, setMode] = useState<'Hackathon' | 'Startup'>('Hackathon')
+  const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null)
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const advanceTimer = useRef<number | null>(null)
   const activeJuror = JURORS[activeIndex]
@@ -107,10 +109,22 @@ function App() {
     recognitionRef.current?.stop()
     setActiveIndex(1)
     setStage('researching')
+    void beginRemoteResearch(transcript || pitch)
     advanceTimer.current = window.setTimeout(() => {
       setStage('juror-speaking')
       window.setTimeout(() => speak(JURORS[1].line), 140)
     }, 1400)
+  }
+
+  async function beginRemoteResearch(casePitch: string) {
+    try {
+      const remoteSession = await createRemoteSession({ mode, pitch: casePitch })
+      if (!remoteSession) return
+      setRemoteSessionId(remoteSession.id)
+      await requestResearch(remoteSession.id)
+    } catch {
+      setRemoteSessionId(null)
+    }
   }
 
   function advanceJury() {
@@ -158,7 +172,7 @@ function App() {
     {['user-speaking', 'researching', 'juror-speaking', 'awaiting-answer'].includes(stage) && <section className="pitch-stage">
       <div className="stage-top"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><span>{mode} MODE · {caseName}</span></div>
       <JurySky activeIndex={stage === 'user-speaking' ? -1 : activeIndex} onJurorSelect={(index) => { if (stage !== 'user-speaking') { setActiveIndex(index); setStage('juror-speaking') } }} />
-      <div className="voice-cue" aria-live="polite"><div className="cue-label"><span className={`live-dot ${stage === 'user-speaking' ? 'recording' : ''}`} />{stageStatus}<button onClick={() => setMuted((current) => !current)} aria-label={muted ? 'Unmute jury voices' : 'Mute jury voices'}>{muted ? 'UNMUTE' : 'MUTE'}</button></div><div className="cue-body"><div className="wave" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div><p>{stageLine}</p>{stage === 'user-speaking' && <button className="end-pitch" onClick={endVoicePitch}>I’M DONE <i>→</i></button>}{stage === 'juror-speaking' && <button className="end-pitch" onClick={() => setStage('awaiting-answer')}>CONTINUE <i>→</i></button>}{stage === 'awaiting-answer' && <button className="end-pitch" onClick={advanceJury}>{activeIndex === 3 ? 'HEAR VERDICT' : 'NEXT JUROR'} <i>→</i></button>}</div></div>
+      <div className="voice-cue" aria-live="polite"><div className="cue-label"><span className={`live-dot ${stage === 'user-speaking' ? 'recording' : ''}`} />{stageStatus}<span className="connection-state">{remoteSessionId ? 'LIVE EVIDENCE' : 'DEMO MODE'}</span><button onClick={() => setMuted((current) => !current)} aria-label={muted ? 'Unmute jury voices' : 'Mute jury voices'}>{muted ? 'UNMUTE' : 'MUTE'}</button></div><div className="cue-body"><div className="wave" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div><p>{stageLine}</p>{stage === 'user-speaking' && <button className="end-pitch" onClick={endVoicePitch}>I’M DONE <i>→</i></button>}{stage === 'juror-speaking' && <button className="end-pitch" onClick={() => setStage('awaiting-answer')}>CONTINUE <i>→</i></button>}{stage === 'awaiting-answer' && <button className="end-pitch" onClick={advanceJury}>{activeIndex === 3 ? 'HEAR VERDICT' : 'NEXT JUROR'} <i>→</i></button>}</div></div>
     </section>}
 
     {stage === 'verdict' && <section className="verdict-screen"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><div className="verdict-copy"><p>THE JURY’S VERDICT</p><h2>{caseName} has<br /><em>a pulse.</em></h2><span>The jury found a version worth building. Keep the pressure; cut the platform.</span><div className="ally-note"><b>THE ALLY SAYS</b><h3>Build the 90-second moment.</h3><p>Make Gale interrupt with a real receipt, then show how the user can pivot. That is the demo people will remember.</p></div><div className="vote-row">{JURORS.map((juror) => <span key={juror.id} style={{ '--vote-color': juror.accent } as React.CSSProperties}><b>{juror.name}</b>{juror.verdict}</span>)}</div><button className="sun-button" onClick={() => { setActiveIndex(0); setStage('intro') }}>TRY ANOTHER IDEA <i>→</i></button></div><JurySky activeIndex={1} onJurorSelect={setActiveIndex} subdued /></section>}
