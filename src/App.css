@@ -242,6 +242,7 @@
   outline: 4px solid #fff;
   border-radius: 50%;
 }
+.sky-juror:disabled { cursor: default; }
 .juror-ember {
   bottom: -7%;
   left: -4%;

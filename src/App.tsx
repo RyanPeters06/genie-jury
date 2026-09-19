@@ -13,7 +13,7 @@ import type { ConnectionState, JuryEvaluation, JuryScore } from './lib/jury-api'
 import './App.css'
 import './intro-layout.css'
 
-type SessionStage = 'intro' | 'mic-ready' | 'text-fallback' | 'user-speaking' | 'researching' | 'juror-speaking' | 'awaiting-answer' | 'verdict'
+type SessionStage = 'intro' | 'mic-ready' | 'text-fallback' | 'user-speaking' | 'researching' | 'juror-speaking' | 'verdict'
 
 type Juror = {
   id: 'ember' | 'gale' | 'tide' | 'volt'
@@ -65,7 +65,6 @@ function App() {
   const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null)
   const [connection, setConnection] = useState<ConnectionState>('checking')
   const [jurorLine, setJurorLine] = useState(JURORS[0].line)
-  const [jurorCue, setJurorCue] = useState(JURORS[0].cue)
   const [evaluation, setEvaluation] = useState<JuryEvaluation>(() => fallbackScorecard(defaultPitch))
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const advanceTimer = useRef<number | null>(null)
@@ -76,6 +75,7 @@ function App() {
   const jurorAudioUrlRef = useRef<string | null>(null)
   const transcriptRef = useRef('')
   const submittingTurnRef = useRef(false)
+  const conversationActiveRef = useRef(false)
   const activeJuror = JURORS[activeIndex]
   const caseName = useMemo(() => pitch.match(/^\s*([A-Z][\w\s'-]{2,35}?)(?:\s+is|\s+helps|\s+lets|:)/)?.[1]?.trim() || 'Your idea', [pitch])
 
@@ -84,11 +84,6 @@ function App() {
       if (event.target instanceof HTMLTextAreaElement) return
       if (event.key.toLowerCase() === 'm') setMuted((current) => !current)
       if (event.key === 'Escape' && stage !== 'intro') finishSession()
-      if (event.code === 'Space' && ['mic-ready', 'awaiting-answer'].includes(stage)) {
-        event.preventDefault()
-        if (stage === 'mic-ready') void beginVoicePitch()
-        else beginBuilderResponse()
-      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -103,13 +98,20 @@ function App() {
 
   useEffect(() => { void getConnectionState().then(setConnection) }, [])
 
-  const speak = (text: string, juror = activeJuror) => {
-    if (muted || !('speechSynthesis' in window)) return
+  const speak = (text: string, juror = activeJuror) => new Promise<void>((resolve) => {
+    if (muted || !('speechSynthesis' in window)) { resolve(); return }
     window.speechSynthesis.cancel()
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.rate = .97
     utterance.pitch = juror.id === 'volt' ? 1.22 : juror.id === 'ember' ? .82 : 1
+    utterance.onend = () => resolve()
+    utterance.onerror = () => resolve()
     window.speechSynthesis.speak(utterance)
+  })
+
+  function startLiveConversation() {
+    conversationActiveRef.current = true
+    void beginVoicePitch()
   }
 
   async function beginVoicePitch() {
@@ -188,6 +190,8 @@ function App() {
         for (let index = event.resultIndex; index < event.results.length; index += 1) words += event.results[index][0].transcript
         transcriptRef.current = `${transcriptRef.current} ${words}`.trim()
         setTranscript(transcriptRef.current)
+        if (advanceTimer.current) window.clearTimeout(advanceTimer.current)
+        advanceTimer.current = window.setTimeout(() => endVoicePitch(), 1_350)
       }
       recognition.onerror = () => setStage('text-fallback')
       recognition.onend = () => {
@@ -226,16 +230,20 @@ function App() {
 
   async function playJurorLine(juror: Juror, line: string, sessionId = remoteSessionId) {
     stopJurorAudio()
-    if (muted || !sessionId) { speak(line, juror); return }
+    if (muted || !sessionId) { await speak(line, juror); return }
     try {
       const blob = await requestJurorAudio(sessionId, juror.id, line)
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
       jurorAudioUrlRef.current = url
       jurorAudioRef.current = audio
-      audio.onended = () => stopJurorAudio()
+      const completed = new Promise<void>((resolve) => {
+        audio.onended = () => { stopJurorAudio(); resolve() }
+        audio.onerror = () => { stopJurorAudio(); resolve() }
+      })
       await audio.play()
-    } catch { speak(line, juror) }
+      await completed
+    } catch { await speak(line, juror) }
   }
 
   async function submitBuilderTurn() {
@@ -251,27 +259,28 @@ function App() {
       if (!sessionId) throw new Error('No remote session')
       const turn = await requestJurorTurn(sessionId, juror.id, builderTurn)
       setJurorLine(turn.line)
-      setJurorCue(turn.cue)
       setStage('juror-speaking')
       await playJurorLine(juror, turn.line, sessionId)
     } catch {
       setConnection('service-unavailable')
       setJurorLine(juror.line)
-      setJurorCue(juror.cue)
       setStage('juror-speaking')
       await playJurorLine(juror, juror.line)
     } finally {
       submittingTurnRef.current = false
+      if (conversationActiveRef.current) continueConversation()
     }
   }
 
-  function beginBuilderResponse() {
+  function continueConversation() {
     if (activeIndex === JURORS.length - 1) { finishSession(); return }
-    setActiveIndex((index) => index + 1)
+    const nextIndex = activeIndex + 1
+    setActiveIndex(nextIndex)
     void beginVoicePitch()
   }
 
   function finishSession() {
+    conversationActiveRef.current = false
     manualRecognitionStop.current = true
     if (advanceTimer.current) {
       window.clearTimeout(advanceTimer.current)
@@ -294,38 +303,32 @@ function App() {
     } catch { /* The transparent local scorecard remains useful offline. */ }
   }
 
-  const submitTextPitch = (event: FormEvent) => { event.preventDefault(); transcriptRef.current = pitch; setTranscript(pitch); void submitBuilderTurn() }
-  const stageStatus = stage === 'user-speaking' ? 'YOUR TURN — WE ARE LISTENING' : stage === 'researching' ? 'GALE IS GATHERING RECEIPTS' : stage === 'juror-speaking' ? `${activeJuror.name.toUpperCase()} — ${jurorCue.toUpperCase()}` : stage === 'awaiting-answer' ? 'YOUR RESPONSE' : 'THE JURY IS READY'
-  const stageLine = stage === 'user-speaking' ? (transcript || 'Pitch your idea. The jury will answer when you finish.') : stage === 'researching' ? 'Gale is checking your highest-risk claim against live evidence…' : stage === 'juror-speaking' ? jurorLine : stage === 'awaiting-answer' ? 'Space continues to the next juror.' : 'Press space to begin your pitch.'
+  const submitTextPitch = (event: FormEvent) => { event.preventDefault(); conversationActiveRef.current = true; transcriptRef.current = pitch; setTranscript(pitch); void submitBuilderTurn() }
+  const stageStatus = stage === 'user-speaking' ? 'LIVE — LISTENING' : stage === 'researching' ? 'GALE IS CHECKING THE RECEIPTS' : stage === 'juror-speaking' ? `${activeJuror.name.toUpperCase()} IS SPEAKING` : 'THE JURY IS READY'
+  const stageLine = stage === 'user-speaking' ? (transcript || 'Speak naturally. The panel will respond after a short pause.') : stage === 'researching' ? 'Gale is checking the claim while the panel holds the floor…' : stage === 'juror-speaking' ? jurorLine : 'Connecting the room…'
 
   return <main className={`app day-sky stage-${stage}`} style={{ '--active-accent': activeJuror.accent } as CSSProperties}>
     <Cloudscape />
     {stage === 'intro' && <section className="intro-screen">
       <div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div>
-      <div className="intro-copy"><p>THE HONEST TEAMMATE YOU NEEDED</p><h1>Pitch your idea.<br /><em>Face the jury.</em></h1><span>Four skyborne jurors pressure-test your hackathon idea before the real judges do.</span><button className="sun-button" onClick={() => setStage('mic-ready')}>ENTER THE SKY <i>→</i></button></div>
+      <div className="intro-copy"><p>THE HONEST TEAMMATE YOU NEEDED</p><h1>Pitch your idea.<br /><em>Face the jury.</em></h1><span>Four skyborne jurors pressure-test your hackathon idea before the real judges do.</span><button className="sun-button" onClick={startLiveConversation}>ENTER THE SKY <i>→</i></button></div>
       <JurySky activeIndex={-1} onJurorSelect={setActiveIndex} />
-    </section>}
-
-    {stage === 'mic-ready' && <section className="ready-screen">
-      <div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div>
-      <div className="ready-card"><span className="sky-icon">☁</span><p>LIVE VOICE PITCH</p><h2>The Jury is listening.</h2><span>Speak naturally. The jurors wait until you finish before they challenge your pitch.</span><button className="sun-button" onClick={() => void beginVoicePitch()}>TURN ON MIC <i>●</i></button><button className="text-link" onClick={() => setStage('text-fallback')}>I would rather type my pitch</button><small>Space starts · M mutes jurors · Esc ends the session</small></div>
-      <JurySky activeIndex={-1} onJurorSelect={setActiveIndex} subdued />
     </section>}
 
     {stage === 'text-fallback' && <section className="text-screen"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><form onSubmit={submitTextPitch}><p>TYPE YOUR CASE</p><h2>What idea are you asking<br />the Jury to believe in?</h2><div className="mode-toggle">{(['Hackathon', 'Startup'] as const).map((item) => <button type="button" className={mode === item ? 'selected' : ''} onClick={() => setMode(item)} key={item}>{item} mode</button>)}</div><textarea value={pitch} onChange={(event) => setPitch(event.target.value)} /><button className="sun-button" type="submit">SUMMON THE JURY <i>→</i></button></form></section>}
 
-    {['user-speaking', 'researching', 'juror-speaking', 'awaiting-answer'].includes(stage) && <section className="pitch-stage">
+    {['user-speaking', 'researching', 'juror-speaking'].includes(stage) && <section className="pitch-stage">
       <div className="stage-top"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><div className="stage-actions"><span>{mode} MODE · {caseName}</span><button className="end-session" onClick={finishSession}>END SESSION</button></div></div>
-      <JurySky activeIndex={stage === 'user-speaking' ? -1 : activeIndex} talkingIndex={stage === 'juror-speaking' ? activeIndex : -1} onJurorSelect={(index) => { if (stage !== 'user-speaking') { setActiveIndex(index); setStage('juror-speaking') } }} />
-      <div className="voice-cue" aria-live="polite"><div className="cue-label"><span className={`live-dot ${stage === 'user-speaking' ? 'recording' : ''}`} />{stageStatus}<span className="connection-state">{connection === 'connected' ? 'CONNECTED' : connection === 'checking' ? 'CHECKING' : connection === 'demo-fallback' ? 'DEMO FALLBACK' : 'SERVICE UNAVAILABLE'}</span><button onClick={() => { stopJurorAudio(); setMuted((current) => !current) }} aria-label={muted ? 'Unmute jury voices' : 'Mute jury voices'}>{muted ? 'UNMUTE' : 'MUTE'}</button></div><div className="cue-body"><div className="wave" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div><p>{stageLine}</p>{stage === 'user-speaking' && <button className="end-pitch" onClick={endVoicePitch}>I’M DONE <i>→</i></button>}{stage === 'juror-speaking' && <button className="end-pitch" onClick={beginBuilderResponse}>{activeIndex === 3 ? 'HEAR VERDICT' : 'YOUR RESPONSE'} <i>→</i></button>}</div></div>
+      <JurySky activeIndex={stage === 'user-speaking' ? -1 : activeIndex} talkingIndex={stage === 'juror-speaking' ? activeIndex : -1} interactive={false} onJurorSelect={() => undefined} />
+      <div className="voice-cue" aria-live="polite"><div className="cue-label"><span className={`live-dot ${stage === 'user-speaking' ? 'recording' : ''}`} />{stageStatus}<span className="connection-state">{connection === 'connected' ? 'CONNECTED' : connection === 'checking' ? 'DEMO FALLBACK' : connection === 'demo-fallback' ? 'DEMO FALLBACK' : 'SERVICE UNAVAILABLE'}</span></div><div className="cue-body"><div className="wave" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div><p>{stageLine}</p></div></div>
     </section>}
 
     {stage === 'verdict' && <section className="verdict-screen"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><div className="scoreboard"><div className="scoreboard-intro"><p>THE JURY’S SCORECARD</p><div className="overall-score"><b>{evaluation.overall}</b><span>/ 100<br />OVERALL</span></div><h2>{caseName} has<br /><em>a pulse.</em></h2><span>{evaluation.headline}</span><div className="ally-note"><b>THE ALLY’S RECOVERY PLAN</b><h3>Make the next pitch sharper.</h3><p>{evaluation.recoveryPlan}</p></div></div><div className="juror-score-grid">{JURORS.map((juror) => { const score = evaluation.jurors.find((item) => item.juror === juror.id) ?? fallbackScorecard(pitch).jurors.find((item) => item.juror === juror.id)!; return <article className="juror-score" key={juror.id} style={{ '--score-color': juror.accent } as CSSProperties}><div className="score-card-head"><span>{juror.name}<small>{juror.role}</small></span><strong>{score.score}<i>/100</i></strong></div><p>{score.summary}</p><div className="criteria-list">{score.criteria.map((criterion) => <div key={criterion.label}><span>{criterion.label}</span><b>{criterion.score}/{criterion.max}</b><i><em style={{ width: `${(criterion.score / criterion.max) * 100}%` }} /></i></div>)}</div><footer><b>NEXT MOVE</b>{score.action}</footer></article> })}</div><button className="sun-button" onClick={() => { setActiveIndex(0); setStage('intro') }}>TRY ANOTHER IDEA <i>→</i></button></div><JurySky activeIndex={1} onJurorSelect={setActiveIndex} subdued /></section>}
   </main>
 }
 
-function JurySky({ activeIndex, talkingIndex = -1, subdued = false, onJurorSelect }: { activeIndex: number; talkingIndex?: number; subdued?: boolean; onJurorSelect: (index: number) => void }) {
-  return <div className={`jury-sky ${subdued ? 'subdued' : ''}`} aria-label="The Genie Jury">{JURORS.map((juror, index) => <button key={juror.id} className={`sky-juror juror-${juror.id} ${activeIndex === index ? 'active' : ''} ${activeIndex >= 0 && activeIndex !== index ? 'dimmed' : ''}`} onClick={() => onJurorSelect(index)} aria-label={`${juror.name}, ${juror.role}`}><img src={talkingIndex === index ? juror.speakingImage : juror.image} alt="" /><span className="juror-tag"><b>{juror.name}</b>{juror.role}</span></button>)}</div>
+function JurySky({ activeIndex, talkingIndex = -1, subdued = false, interactive = true, onJurorSelect }: { activeIndex: number; talkingIndex?: number; subdued?: boolean; interactive?: boolean; onJurorSelect: (index: number) => void }) {
+  return <div className={`jury-sky ${subdued ? 'subdued' : ''}`} aria-label="The Genie Jury">{JURORS.map((juror, index) => <button key={juror.id} className={`sky-juror juror-${juror.id} ${activeIndex === index ? 'active' : ''} ${activeIndex >= 0 && activeIndex !== index ? 'dimmed' : ''}`} onClick={() => onJurorSelect(index)} disabled={!interactive} aria-label={`${juror.name}, ${juror.role}`}><img src={talkingIndex === index ? juror.speakingImage : juror.image} alt="" /><span className="juror-tag"><b>{juror.name}</b>{juror.role}</span></button>)}</div>
 }
 
 function Cloudscape() { return <><div className="sun-glow" /><div className="cloud bank-one" /><div className="cloud bank-two" /><div className="cloud bank-three" /><div className="cloud cloud-left" /><div className="cloud cloud-right" /></> }

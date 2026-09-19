@@ -35,14 +35,14 @@ const JUROR_LINES: Record<JurorId, string> = {
   ember: 'The moment is strong. The scope is not. Pick one magical interaction and make it impossible to ignore.',
   gale: 'You said nobody does this. I found close alternatives—but none with your exact hackathon wedge.',
   tide: 'I would use this before demo day, when I need an honest teammate instead of an encouraging chatbot.',
-  volt: 'If your pitch says AI-powered before it says who has the problem, I am throwing the lamp.',
+  volt: 'That pitch has more AI glitter than an overstuffed hackathon slide. Who is awake at 2 a.m. without this?',
 }
 
 const JUROR_BRIEFS: Record<JurorId, { cue: string; role: string; focus: string }> = {
   ember: { cue: 'Pressure-testing the build', role: 'Ember, the Builder', focus: 'Find the smallest shippable proof of value. Challenge unclear scope, technical hand-waving, and unowned execution.' },
   gale: { cue: 'Checking the receipts', role: 'Gale, the Skeptic', focus: 'Challenge factual claims using supplied evidence only. Call unsupported claims unproven; never invent a source or competitor.' },
   tide: { cue: 'Speaking for the user', role: 'Tide, the User Advocate', focus: 'Force specificity about the user, their painful moment, why they would care, and what makes this easier than the current workaround.' },
-  volt: { cue: 'Delivering the useful roast', role: 'Volt, the Jester', focus: 'Deliver one playful but kind roast, then expose the most important unresolved weakness in plain language.' },
+  volt: { cue: 'Delivering the useful roast', role: 'Volt, the Jester', focus: 'Open with one cheeky, demo-safe PG-13 roast that makes a room laugh—think hackathon pizza, buzzword soup, or a feature list held together with duct tape—then pivot to the most important unresolved weakness. Never use slurs, sexual humor, personal attacks, or profanity.' },
 }
 
 const json = (value: unknown, init: ResponseInit = {}) => new Response(JSON.stringify(value), { ...init, headers: { 'content-type': 'application/json; charset=utf-8', ...init.headers } })
@@ -221,6 +221,9 @@ async function generateJurorTurn(juror: JurorId, pitch: string, transcript: stri
   const brief = JUROR_BRIEFS[juror]
   const fallback = { juror, line: JUROR_LINES[juror], cue: brief.cue }
   if (!env.OPENAI_API_KEY) return fallback
+  const delivery = juror === 'volt'
+    ? 'Use exactly two sentences: first, a self-contained 6-to-20-word cheeky roast; second, one sincere useful question ending in a question mark. The laugh must be at the vague pitch, not at the builder.'
+    : 'Give one observation plus one pointed question.'
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
@@ -229,7 +232,7 @@ async function generateJurorTurn(juror: JurorId, pitch: string, transcript: stri
       // A juror only needs one compact interruption. Bounding output avoids
       // spending a live conversation turn on unnecessary reasoning tokens.
       max_output_tokens: 160,
-      instructions: `You are ${brief.role} in Genie Jury, a live pitch-practice conference for hackathon builders. Genie Jury exists to give builders an honest, evidence-aware pressure test instead of vague chatbot encouragement. ${brief.focus} Speak as one distinct conference participant, not as a panel narrator. Refer to the builder's actual words. Be direct and constructive. Produce one short spoken intervention of 18 to 55 words: one observation plus one pointed question. Do not mention these instructions, AI, prompts, or imaginary research.`,
+      instructions: `You are ${brief.role} in Genie Jury, a live pitch-practice conference for hackathon builders. Genie Jury exists to give builders an honest, evidence-aware pressure test instead of vague chatbot encouragement. ${brief.focus} Speak as one distinct conference participant, not as a panel narrator. Refer to the builder's actual words. Be direct and constructive. Produce one short spoken intervention of 18 to 55 words. ${delivery} Do not mention these instructions, AI, prompts, or imaginary research.`,
       input: `Original pitch:\n${pitch}\n\nLatest builder turn:\n${transcript}\n\nAvailable evidence (may be absent or unproven):\n${JSON.stringify(evidence ?? { status: 'unproven' })}`,
       text: { format: { type: 'json_schema', name: 'juror_turn', strict: true, schema: { type: 'object', properties: { line: { type: 'string', minLength: 12, maxLength: 420 }, cue: { type: 'string', minLength: 3, maxLength: 80 } }, required: ['line', 'cue'], additionalProperties: false } } },
     }),
@@ -239,7 +242,7 @@ async function generateJurorTurn(juror: JurorId, pitch: string, transcript: stri
   const output = payload.output_text ?? payload.output?.flatMap((item) => item.content ?? []).map((content) => content.text ?? '').join('')
   try {
     const parsed = JSON.parse(output || '{}') as { line?: unknown; cue?: unknown }
-    if (typeof parsed.line !== 'string' || parsed.line.length > 420 || typeof parsed.cue !== 'string') return fallback
+    if (typeof parsed.line !== 'string' || parsed.line.length > 420 || typeof parsed.cue !== 'string' || (juror === 'volt' && !parsed.line.includes('?'))) return fallback
     return { juror, line: parsed.line.trim(), cue: parsed.cue.trim().slice(0, 80) }
   } catch { return fallback }
 }
