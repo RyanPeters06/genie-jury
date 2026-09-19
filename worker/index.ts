@@ -24,6 +24,9 @@ interface JurySessionRecord { id: string; mode: 'Hackathon' | 'Startup'; pitch: 
 interface Claim { claim: string; type: 'market' | 'competition' | 'feasibility' | 'user' | 'business'; importance: number; confidence: number; researchQuery: string; evidenceStatus: 'verified' | 'contested' | 'unproven' }
 interface Evidence { status: 'verified' | 'contested' | 'unproven'; sourceUrl?: string; title?: string; excerpt?: string; capturedAt: string; screenshotCaptured: boolean }
 interface AgentTurn { juror: JurorId; line: string; cue: string }
+interface JuryCriterion { label: string; score: number; max: number }
+interface JuryScore { juror: JurorId; score: number; summary: string; action: string; criteria: JuryCriterion[] }
+interface JuryEvaluation { overall: number; headline: string; recoveryPlan: string; jurors: JuryScore[] }
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000
 const LIVE_RESEARCH_BUDGET_MS = 6_000
@@ -120,6 +123,7 @@ export class JurySession {
     if (request.method === 'POST' && url.pathname === '/events') return this.appendEvent(request, session)
     if (request.method === 'POST' && url.pathname === '/research') return this.research(session)
     if (request.method === 'POST' && url.pathname === '/turn') return this.prepareJurorTurn(request, session)
+    if (request.method === 'POST' && url.pathname === '/evaluation') return this.prepareEvaluation(session)
     return failure('Route not found.', 404)
   }
 
@@ -180,6 +184,15 @@ export class JurySession {
     return json(turn)
   }
 
+  private async prepareEvaluation(session: JurySessionRecord): Promise<Response> {
+    const builderTurns = session.events.filter((event) => event.type === 'transcript.final').map((event) => String(event.data.transcript ?? '')).filter(Boolean)
+    const evaluation = await generateEvaluation(session.pitch, builderTurns, this.env)
+    this.append(session, 'verdict.ready', { evaluation })
+    session.stage = 'verdict'
+    await this.save(session)
+    return json(evaluation)
+  }
+
   private async save(session: JurySessionRecord) {
     await this.state.storage.put('session', session)
     if (!this.env.DB) return
@@ -235,6 +248,51 @@ async function generateJurorTurnWithinBudget(juror: JurorId, pitch: string, tran
   const fallback = { juror, line: JUROR_LINES[juror], cue: JUROR_BRIEFS[juror].cue }
   const timedOut = new Promise<AgentTurn>((resolve) => setTimeout(() => resolve(fallback), JUROR_GENERATION_BUDGET_MS))
   return Promise.race([generateJurorTurn(juror, pitch, transcript, evidence, env), timedOut])
+}
+
+function fallbackEvaluation(pitch: string): JuryEvaluation {
+  const lower = pitch.toLowerCase()
+  const hasUser = /user|student|customer|builder|team|people|creator/.test(lower)
+  const hasProof = /research|evidence|test|data|interview|validate|pilot/.test(lower)
+  const hasScope = /mvp|prototype|weekend|demo|one |first /.test(lower)
+  const hasHook = /because|so that|instead of|problem|pain/.test(lower)
+  const make = (juror: JurorId, first: string, firstScore: number, second: string, secondScore: number, summary: string, action: string): JuryScore => ({ juror, score: firstScore + secondScore, summary, action, criteria: [{ label: first, score: firstScore, max: 50 }, { label: second, score: secondScore, max: 50 }] })
+  const jurors = [
+    make('ember', 'Build focus', hasScope ? 39 : 25, 'MVP path', hasScope ? 35 : 24, hasScope ? 'There is a buildable wedge, but it still needs one visible proof point.' : 'The build is still broad; choose the smallest magical interaction.', 'Name the one flow you can demo by the end of the weekend.'),
+    make('gale', 'Claim credibility', hasProof ? 38 : 21, 'Competitive proof', hasProof ? 34 : 23, hasProof ? 'You brought some proof language; now make it specific and citable.' : 'Your strongest claims need evidence before they become your demo story.', 'Turn one risky claim into a source, experiment, or measurable proof.'),
+    make('tide', 'User specificity', hasUser ? 39 : 23, 'Pain & urgency', hasHook ? 35 : 24, hasUser ? 'A real person is visible in the pitch; sharpen their exact painful moment.' : 'The user is still blurry. Give the jury one person and one urgent moment.', 'Say who reaches for this, what they do today, and why that fails.'),
+    make('volt', 'Pitch clarity', hasHook ? 37 : 25, 'Demo memorability', hasScope ? 35 : 26, hasHook ? 'There is a hook worth remembering; remove the extra explanation around it.' : 'The idea needs a clearer one-line hook before the roast becomes a compliment.', 'Open with the problem, then show the 90-second wow moment.'),
+  ]
+  const overall = Math.round(jurors.reduce((total, juror) => total + juror.score, 0) / jurors.length)
+  return { overall, headline: overall >= 75 ? 'Promising. Now prove the sharpest claim.' : 'There is a real seed here. Narrow it before you build wider.', recoveryPlan: 'Choose one user, one painful moment, one proof, and one demo-worthy interaction.', jurors }
+}
+
+async function generateEvaluation(pitch: string, builderTurns: string[], env: Env): Promise<JuryEvaluation> {
+  const fallback = fallbackEvaluation(pitch)
+  if (!env.OPENAI_API_KEY) return fallback
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST', headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: env.OPENAI_MODEL ?? 'gpt-4.1-mini', max_output_tokens: 1_200,
+        instructions: 'You are the fair, evidence-aware final panel of Genie Jury. Score the builder only from their pitch and spoken replies. Be constructive, specific, and honest. Do not invent evidence. Use this rubric for each 50-point criterion: 0–15 absent, 16–29 vague assertion, 30–39 clear and plausible, 40–50 specific proof, example, or measurable plan. Return four scores: Ember rates Build focus and MVP path; Gale rates Claim credibility and Competitive proof; Tide rates User specificity and Pain & urgency; Volt rates Pitch clarity and Demo memorability. Each juror score is the sum of its two criteria. Give a concise headline and one practical recovery plan.',
+        input: `Original pitch:\n${pitch}\n\nBuilder replies:\n${builderTurns.join('\n---\n') || '(No additional replies recorded.)'}`,
+        text: { format: { type: 'json_schema', name: 'jury_evaluation', strict: true, schema: { type: 'object', properties: { overall: { type: 'integer', minimum: 0, maximum: 100 }, headline: { type: 'string', minLength: 10, maxLength: 180 }, recoveryPlan: { type: 'string', minLength: 20, maxLength: 240 }, jurors: { type: 'array', minItems: 4, maxItems: 4, items: { type: 'object', properties: { juror: { type: 'string', enum: ['ember', 'gale', 'tide', 'volt'] }, score: { type: 'integer', minimum: 0, maximum: 100 }, summary: { type: 'string', minLength: 10, maxLength: 180 }, action: { type: 'string', minLength: 10, maxLength: 180 }, criteria: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'object', properties: { label: { type: 'string', minLength: 3, maxLength: 40 }, score: { type: 'integer', minimum: 0, maximum: 50 }, max: { type: 'integer', enum: [50] } }, required: ['label', 'score', 'max'], additionalProperties: false } } }, required: ['juror', 'score', 'summary', 'action', 'criteria'], additionalProperties: false } } }, required: ['overall', 'headline', 'recoveryPlan', 'jurors'], additionalProperties: false } } },
+      }),
+    })
+    if (!response.ok) return fallback
+    const payload = await response.json<{ output?: Array<{ content?: Array<{ text?: string }> }> }>()
+    const text = payload.output?.flatMap((item) => item.content ?? []).map((content) => content.text ?? '').join('')
+    const evaluation = JSON.parse(text || '{}') as JuryEvaluation
+    if (!Array.isArray(evaluation.jurors) || evaluation.jurors.length !== 4) return fallback
+    const expectedJurors: JurorId[] = ['ember', 'gale', 'tide', 'volt']
+    if (new Set(evaluation.jurors.map((juror) => juror.juror)).size !== 4 || evaluation.jurors.some((juror) => !expectedJurors.includes(juror.juror) || juror.criteria.length !== 2)) return fallback
+    const jurors = evaluation.jurors.map((juror) => {
+      const criteria = juror.criteria.map((criterion) => ({ ...criterion, score: Math.max(0, Math.min(50, Math.round(criterion.score))), max: 50 }))
+      return { ...juror, criteria, score: criteria.reduce((total, criterion) => total + criterion.score, 0) }
+    })
+    return { ...evaluation, jurors, overall: Math.round(jurors.reduce((total, juror) => total + juror.score, 0) / jurors.length) }
+  } catch { return fallback }
 }
 
 async function researchClaim(claim: Claim, env: Env): Promise<Evidence> {

@@ -2,6 +2,9 @@ export type RemoteSession = { id: string; stage: string }
 export type ConnectionState = 'checking' | 'connected' | 'demo-fallback' | 'service-unavailable'
 export type JurorId = 'ember' | 'gale' | 'tide' | 'volt'
 export type JurorTurn = { juror: JurorId; line: string; cue: string }
+export type JuryCriterion = { label: string; score: number; max: number }
+export type JuryScore = { juror: JurorId; score: number; summary: string; action: string; criteria: JuryCriterion[] }
+export type JuryEvaluation = { overall: number; headline: string; recoveryPlan: string; jurors: JuryScore[] }
 
 const apiBase = import.meta.env.VITE_JURY_API_URL?.replace(/\/$/, '')
 
@@ -40,6 +43,12 @@ export async function requestJurorTurn(sessionId: string, juror: JurorId, transc
   const response = await request(`/sessions/${sessionId}/turn`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ juror, transcript }) })
   if (!response.ok) throw new Error('The Jury could not prepare a response.')
   return response.json() as Promise<JurorTurn>
+}
+
+export async function requestJuryEvaluation(sessionId: string): Promise<JuryEvaluation> {
+  const response = await request(`/sessions/${sessionId}/evaluation`, { method: 'POST' })
+  if (!response.ok) throw new Error('The Jury could not complete its scorecard.')
+  return response.json() as Promise<JuryEvaluation>
 }
 
 export async function requestRealtimeSecret(sessionId: string): Promise<string | null> {

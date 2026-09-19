@@ -8,8 +8,8 @@ import tideListening from './assets/jurors/tide-listening.png'
 import tideSpeaking from './assets/jurors/tide-speaking.png'
 import voltListening from './assets/jurors/volt-listening.png'
 import voltSpeaking from './assets/jurors/volt-speaking.png'
-import { createRemoteSession, getConnectionState, requestJurorAudio, requestJurorTurn, requestRealtimeSecret } from './lib/jury-api'
-import type { ConnectionState } from './lib/jury-api'
+import { createRemoteSession, getConnectionState, requestJuryEvaluation, requestJurorAudio, requestJurorTurn, requestRealtimeSecret } from './lib/jury-api'
+import type { ConnectionState, JuryEvaluation, JuryScore } from './lib/jury-api'
 import './App.css'
 import './intro-layout.css'
 
@@ -38,6 +38,23 @@ const defaultPitch = 'Genie Jury is a live, evidence-backed pitch arena for hack
 
 const speechRecognition = () => window.SpeechRecognition ?? window.webkitSpeechRecognition
 
+function fallbackScorecard(pitch: string): JuryEvaluation {
+  const lower = pitch.toLowerCase()
+  const hasUser = /user|student|customer|builder|team|people|creator/.test(lower)
+  const hasProof = /research|evidence|test|data|interview|validate|pilot/.test(lower)
+  const hasScope = /mvp|prototype|weekend|demo|one |first /.test(lower)
+  const hasHook = /because|so that|instead of|problem|pain/.test(lower)
+  const score = (juror: JuryScore['juror'], first: string, firstScore: number, second: string, secondScore: number, summary: string, action: string): JuryScore => ({ juror, score: firstScore + secondScore, summary, action, criteria: [{ label: first, score: firstScore, max: 50 }, { label: second, score: secondScore, max: 50 }] })
+  const jurors = [
+    score('ember', 'Build focus', hasScope ? 39 : 25, 'MVP path', hasScope ? 35 : 24, hasScope ? 'A buildable wedge is visible, but it needs one proof point.' : 'The build is broad; choose the smallest magical interaction.', 'Name the one flow you can demo this weekend.'),
+    score('gale', 'Claim credibility', hasProof ? 38 : 21, 'Competitive proof', hasProof ? 34 : 23, hasProof ? 'Proof language is present; make it specific and citable.' : 'Your strongest claims need evidence before they become your story.', 'Turn one risky claim into a source, experiment, or measurable proof.'),
+    score('tide', 'User specificity', hasUser ? 39 : 23, 'Pain & urgency', hasHook ? 35 : 24, hasUser ? 'A real person is visible; sharpen their painful moment.' : 'The user is blurry. Give the jury one person and one urgent moment.', 'Say who reaches for this, what they do today, and why that fails.'),
+    score('volt', 'Pitch clarity', hasHook ? 37 : 25, 'Demo memorability', hasScope ? 35 : 26, hasHook ? 'There is a hook worth remembering; remove the extra explanation.' : 'The idea needs a clearer one-line hook.', 'Open with the problem, then show the 90-second wow moment.'),
+  ]
+  const overall = Math.round(jurors.reduce((total, juror) => total + juror.score, 0) / jurors.length)
+  return { overall, headline: overall >= 75 ? 'Promising. Now prove the sharpest claim.' : 'There is a real seed here. Narrow it before you build wider.', recoveryPlan: 'Choose one user, one painful moment, one proof, and one demo-worthy interaction.', jurors }
+}
+
 function App() {
   const [stage, setStage] = useState<SessionStage>('intro')
   const [pitch, setPitch] = useState(defaultPitch)
@@ -49,6 +66,7 @@ function App() {
   const [connection, setConnection] = useState<ConnectionState>('checking')
   const [jurorLine, setJurorLine] = useState(JURORS[0].line)
   const [jurorCue, setJurorCue] = useState(JURORS[0].cue)
+  const [evaluation, setEvaluation] = useState<JuryEvaluation>(() => fallbackScorecard(defaultPitch))
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const advanceTimer = useRef<number | null>(null)
   const manualRecognitionStop = useRef(false)
@@ -262,7 +280,18 @@ function App() {
     recognitionRef.current?.stop()
     stopInputCapture()
     stopJurorAudio()
+    const initialScorecard = fallbackScorecard(transcriptRef.current.trim() || transcript.trim() || pitch)
+    setEvaluation(initialScorecard)
     setStage('verdict')
+    void getFinalScorecard()
+  }
+
+  async function getFinalScorecard() {
+    try {
+      const sessionId = remoteSessionId ?? await ensureRemoteSession(pitch)
+      if (!sessionId) return
+      setEvaluation(await requestJuryEvaluation(sessionId))
+    } catch { /* The transparent local scorecard remains useful offline. */ }
   }
 
   const submitTextPitch = (event: FormEvent) => { event.preventDefault(); transcriptRef.current = pitch; setTranscript(pitch); void submitBuilderTurn() }
@@ -291,7 +320,7 @@ function App() {
       <div className="voice-cue" aria-live="polite"><div className="cue-label"><span className={`live-dot ${stage === 'user-speaking' ? 'recording' : ''}`} />{stageStatus}<span className="connection-state">{connection === 'connected' ? 'CONNECTED' : connection === 'checking' ? 'CHECKING' : connection === 'demo-fallback' ? 'DEMO FALLBACK' : 'SERVICE UNAVAILABLE'}</span><button onClick={() => { stopJurorAudio(); setMuted((current) => !current) }} aria-label={muted ? 'Unmute jury voices' : 'Mute jury voices'}>{muted ? 'UNMUTE' : 'MUTE'}</button></div><div className="cue-body"><div className="wave" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div><p>{stageLine}</p>{stage === 'user-speaking' && <button className="end-pitch" onClick={endVoicePitch}>I’M DONE <i>→</i></button>}{stage === 'juror-speaking' && <button className="end-pitch" onClick={beginBuilderResponse}>{activeIndex === 3 ? 'HEAR VERDICT' : 'YOUR RESPONSE'} <i>→</i></button>}</div></div>
     </section>}
 
-    {stage === 'verdict' && <section className="verdict-screen"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><div className="verdict-copy"><p>THE JURY’S VERDICT</p><h2>{caseName} has<br /><em>a pulse.</em></h2><span>The jury found a version worth building. Keep the pressure; cut the platform.</span><div className="ally-note"><b>THE ALLY SAYS</b><h3>Build the 90-second moment.</h3><p>Make Gale interrupt with a real receipt, then show how the user can pivot. That is the demo people will remember.</p></div><div className="vote-row">{JURORS.map((juror) => <span key={juror.id} style={{ '--vote-color': juror.accent } as React.CSSProperties}><b>{juror.name}</b>{juror.verdict}</span>)}</div><button className="sun-button" onClick={() => { setActiveIndex(0); setStage('intro') }}>TRY ANOTHER IDEA <i>→</i></button></div><JurySky activeIndex={1} onJurorSelect={setActiveIndex} subdued /></section>}
+    {stage === 'verdict' && <section className="verdict-screen"><div className="wordmark"><span>✦</span> GENIE <b>JURY</b></div><div className="scoreboard"><div className="scoreboard-intro"><p>THE JURY’S SCORECARD</p><div className="overall-score"><b>{evaluation.overall}</b><span>/ 100<br />OVERALL</span></div><h2>{caseName} has<br /><em>a pulse.</em></h2><span>{evaluation.headline}</span><div className="ally-note"><b>THE ALLY’S RECOVERY PLAN</b><h3>Make the next pitch sharper.</h3><p>{evaluation.recoveryPlan}</p></div></div><div className="juror-score-grid">{JURORS.map((juror) => { const score = evaluation.jurors.find((item) => item.juror === juror.id) ?? fallbackScorecard(pitch).jurors.find((item) => item.juror === juror.id)!; return <article className="juror-score" key={juror.id} style={{ '--score-color': juror.accent } as CSSProperties}><div className="score-card-head"><span>{juror.name}<small>{juror.role}</small></span><strong>{score.score}<i>/100</i></strong></div><p>{score.summary}</p><div className="criteria-list">{score.criteria.map((criterion) => <div key={criterion.label}><span>{criterion.label}</span><b>{criterion.score}/{criterion.max}</b><i><em style={{ width: `${(criterion.score / criterion.max) * 100}%` }} /></i></div>)}</div><footer><b>NEXT MOVE</b>{score.action}</footer></article> })}</div><button className="sun-button" onClick={() => { setActiveIndex(0); setStage('intro') }}>TRY ANOTHER IDEA <i>→</i></button></div><JurySky activeIndex={1} onJurorSelect={setActiveIndex} subdued /></section>}
   </main>
 }
 

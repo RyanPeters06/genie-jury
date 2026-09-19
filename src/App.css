@@ -602,6 +602,162 @@
   color: var(--vote-color);
   margin-right: 5px;
 }
+.stage-verdict {
+  min-height: 100vh;
+  overflow: auto;
+}
+.verdict-screen {
+  min-height: 100vh;
+  padding: 104px clamp(24px, 6vw, 110px) 58px;
+  box-sizing: border-box;
+}
+.verdict-screen .jury-sky {
+  opacity: 0.26;
+  position: fixed;
+}
+.scoreboard {
+  margin: 0 auto;
+  max-width: 1180px;
+  position: relative;
+  z-index: 6;
+}
+.scoreboard-intro {
+  max-width: 650px;
+}
+.scoreboard-intro > p {
+  color: #cc7020;
+  font: 700 11px "DM Mono";
+  letter-spacing: 0.16em;
+  margin: 0 0 11px;
+}
+.overall-score {
+  align-items: center;
+  background: #fffdf9e8;
+  border: 2px solid #31546e;
+  border-radius: 18px;
+  box-shadow: 0 5px 0 #31546e;
+  display: inline-flex;
+  gap: 11px;
+  margin: 0 0 18px;
+  padding: 10px 16px 10px 13px;
+}
+.overall-score b {
+  color: #db7b26;
+  font: 700 45px/.9 "Playfair Display";
+}
+.overall-score span {
+  color: #58718a;
+  font: 700 9px/1.5 "DM Mono";
+  letter-spacing: .1em;
+}
+.scoreboard-intro h2 {
+  font: 700 clamp(42px, 5.4vw, 74px)/.91 "Playfair Display";
+  letter-spacing: -.06em;
+  margin: 0;
+}
+.scoreboard-intro h2 em { color: #d97b29; }
+.scoreboard-intro > span {
+  color: #42617c;
+  display: block;
+  font-size: 16px;
+  line-height: 1.5;
+  margin: 15px 0 18px;
+  max-width: 560px;
+}
+.scoreboard .ally-note {
+  margin: 0 0 22px;
+  max-width: 560px;
+}
+.juror-score-grid {
+  display: grid;
+  gap: 13px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 920px;
+}
+.juror-score {
+  background: #fffdf9ed;
+  border: 2px solid #31546e;
+  border-top: 7px solid var(--score-color);
+  border-radius: 15px;
+  box-shadow: 0 5px 0 #31546e, 0 16px 30px #2e63812a;
+  padding: 15px 16px 14px;
+}
+.score-card-head {
+  align-items: start;
+  display: flex;
+  justify-content: space-between;
+}
+.score-card-head > span {
+  color: #284864;
+  font: 700 16px "Playfair Display";
+}
+.score-card-head small {
+  color: #6d8498;
+  display: block;
+  font: 700 8px "DM Mono";
+  letter-spacing: .1em;
+  margin-top: 2px;
+}
+.score-card-head strong {
+  color: var(--score-color);
+  font: 700 27px/.9 "DM Mono";
+}
+.score-card-head strong i {
+  color: #698095;
+  font: 700 8px "DM Mono";
+  font-style: normal;
+}
+.juror-score > p {
+  color: #3e617c;
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 13px 0 12px;
+  min-height: 34px;
+}
+.criteria-list {
+  border-top: 1px solid #b7cfde;
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+.criteria-list > div {
+  color: #54718b;
+  display: grid;
+  font: 700 8px "DM Mono";
+  gap: 5px 9px;
+  grid-template-columns: 1fr auto;
+  letter-spacing: .04em;
+}
+.criteria-list b { color: #294a64; }
+.criteria-list i {
+  background: #dcecf4;
+  border-radius: 99px;
+  grid-column: 1 / -1;
+  height: 5px;
+  overflow: hidden;
+}
+.criteria-list em {
+  background: var(--score-color);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+.juror-score footer {
+  border-top: 1px dashed #a8c2d2;
+  color: #48677f;
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 12px;
+  padding-top: 10px;
+}
+.juror-score footer b {
+  color: var(--score-color);
+  display: block;
+  font: 700 8px "DM Mono";
+  letter-spacing: .1em;
+  margin-bottom: 3px;
+}
+.scoreboard > .sun-button { margin-top: 28px; }
 @keyframes pulse {
   to {
     box-shadow: 0 0 0 10px #ef663b00;
@@ -694,6 +850,12 @@
   .verdict-screen .jury-sky {
     opacity: 0.42;
   }
+  .verdict-screen {
+    padding: 91px 20px 42px;
+  }
+  .scoreboard-intro h2 { font-size: 47px; }
+  .juror-score-grid { grid-template-columns: 1fr; }
+  .juror-score > p { min-height: 0; }
   .text-screen form {
     top: 48%;
   }
