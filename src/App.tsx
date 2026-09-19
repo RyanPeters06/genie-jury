@@ -41,6 +41,7 @@ function App() {
   const [remoteSessionId, setRemoteSessionId] = useState<string | null>(null)
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const advanceTimer = useRef<number | null>(null)
+  const manualRecognitionStop = useRef(false)
   const activeJuror = JURORS[activeIndex]
   const caseName = useMemo(() => pitch.match(/^\s*([A-Z][\w\s'-]{2,35}?)(?:\s+is|\s+helps|\s+lets|:)/)?.[1]?.trim() || 'Your idea', [pitch])
 
@@ -89,9 +90,10 @@ function App() {
       }
       recognition.onerror = () => setStage('text-fallback')
       recognition.onend = () => {
-        if (stage === 'user-speaking') startDeliberation()
+        if (!manualRecognitionStop.current) startDeliberation()
       }
       recognitionRef.current = recognition
+      manualRecognitionStop.current = false
       setTranscript('')
       setStage('user-speaking')
       recognition.start()
@@ -101,6 +103,7 @@ function App() {
   }
 
   function endVoicePitch() {
+    manualRecognitionStop.current = true
     recognitionRef.current?.stop()
     startDeliberation()
   }
@@ -144,6 +147,7 @@ function App() {
   }
 
   function finishSession() {
+    manualRecognitionStop.current = true
     recognitionRef.current?.stop()
     window.speechSynthesis?.cancel()
     setStage('verdict')
