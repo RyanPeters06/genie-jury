@@ -26,6 +26,7 @@ import './stage.css'
 type Stage = 'intro' | 'ready' | 'text' | 'pitching' | 'deliberating' | 'panel' | 'verdict'
 
 type Juror = { id: JurorId; name: string; role: string; image: string; speakingImage: string; accent: string; cue: string; line: string }
+type Scorecard = { juror: JurorId; score: number; summary: string; action: string; criteria: Array<{ label: string; score: number; max: number }> }
 
 const JURORS: Juror[] = [
   { id: 'ember', name: 'Ember', role: 'The Builder', image: emberListening, speakingImage: emberSpeaking, accent: '#e86748', cue: 'Sizing up the build', line: 'The moment is strong. The scope is not.' },
@@ -41,8 +42,35 @@ const agentAccent = (agent: string) => (agent in JUROR_BY_ID ? JUROR_BY_ID[agent
 
 const DEFAULT_PITCH = 'Genie Jury is a live pitch arena for hackathon builders. Four AI jurors interrupt your pitch, research your claims in a real browser, argue with each other, and hand you the smallest next thing worth building.'
 
+/** A transparent local rubric keeps the verdict useful even if a provider falls back. */
+function scorePitch(pitch: string, evidence: Evidence[], findings: Finding[]): Scorecard[] {
+  const words = pitch.trim().split(/\s+/).filter(Boolean).length
+  const lower = pitch.toLowerCase()
+  const severity = (juror: JurorId) => findings.filter((finding) => finding.agent === juror).reduce((sum, finding) => sum + finding.severity, 0)
+  const hasUser = /\b(user|student|builder|founder|team|people|customer|developer)\b/.test(lower)
+  const hasPain = /\b(problem|pain|struggle|friction|waste|hard|need|without)\b/.test(lower)
+  const verified = evidence.filter((item) => item.status === 'verified').length
+  const grounded = evidence.length > 0
+  const clamp = (score: number) => Math.max(0, Math.min(100, Math.round(score)))
+  const emberScope = clamp(50 - severity('ember') * 7)
+  const emberDemo = clamp(words >= 35 && words <= 180 ? 42 : 25)
+  const galeProof = clamp(verified ? 46 : grounded ? 30 : 16)
+  const galeDiscipline = clamp(50 - severity('gale') * 5)
+  const tidePerson = hasUser ? 43 : 21
+  const tideUrgency = hasPain ? 40 : 20
+  const voltClarity = clamp(words >= 25 && words <= 150 ? 42 : 25)
+  const voltHook = clamp((hasPain ? 28 : 16) + (lower.includes('because') || lower.includes('so that') ? 12 : 4))
+  return [
+    { juror: 'ember', score: clamp(emberScope + emberDemo), summary: 'Build readiness is scored from scope risks and whether the pitch names a demo-sized moment.', action: 'Cut to one end-to-end interaction.', criteria: [{ label: 'Build scope', score: emberScope, max: 50 }, { label: 'Demo path', score: emberDemo, max: 50 }] },
+    { juror: 'gale', score: clamp(galeProof + galeDiscipline), summary: 'Claim confidence depends on captured Browserbase receipts, not on how confident the pitch sounds.', action: 'Prove the riskiest factual claim.', criteria: [{ label: 'Evidence captured', score: galeProof, max: 50 }, { label: 'Claim discipline', score: galeDiscipline, max: 50 }] },
+    { juror: 'tide', score: clamp(tidePerson + tideUrgency), summary: 'User strength is scored from a named person and a concrete moment of pain or urgency.', action: 'Interview three people in that moment.', criteria: [{ label: 'User specificity', score: tidePerson, max: 50 }, { label: 'Pain & urgency', score: tideUrgency, max: 50 }] },
+    { juror: 'volt', score: clamp(voltClarity + voltHook), summary: 'Pitch clarity rewards a concise story that leads with the problem and gives the demo a hook.', action: 'Open with the problem, then show the wow.', criteria: [{ label: 'Pitch clarity', score: voltClarity, max: 50 }, { label: 'Memorable hook', score: voltHook, max: 50 }] },
+  ]
+}
+
 /** Barge-in guard: ignore mic activity for a moment after audio starts so a juror does not interrupt itself. */
 const SELF_ECHO_MS = 700
+const PITCH_SILENCE_MS = 3200
 
 export default function App() {
   const [stage, setStage] = useState<Stage>('intro')
@@ -79,6 +107,7 @@ export default function App() {
   const bargedRef = useRef(false)
   const answerTimer = useRef<number | null>(null)
   const advanceTimer = useRef<number | null>(null)
+  const pitchSilenceTimer = useRef<number | null>(null)
   const interjectAt = useRef(0)
   const busyRef = useRef(false)
   const turnsDoneRef = useRef(false)
@@ -109,6 +138,8 @@ export default function App() {
   }, [])
 
   const speak = useCallback(async (juror: JurorId, line: string) => {
+    if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
+    pitchSilenceTimer.current = null
     stopAudio()
     setSpeakingJuror(juror)
     audioStartedAt.current = Date.now()
@@ -268,6 +299,8 @@ export default function App() {
   const beginDeliberation = useCallback(async () => {
     const sessionId = sessionRef.current
     if (!sessionId || busyRef.current) return
+    if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
+    pitchSilenceTimer.current = null
     busyRef.current = true
     stopAudio()
     setStage('deliberating')
@@ -368,8 +401,22 @@ export default function App() {
 
     if (sessionRef.current) {
       const mic = await openMicrophone(sessionRef.current, {
-        onSpeechStart: handleSpeechStart,
-        onSpeechStop: () => setListening(false),
+        onSpeechStart: () => {
+          if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
+          pitchSilenceTimer.current = null
+          handleSpeechStart()
+        },
+        onSpeechStop: () => {
+          setListening(false)
+          // A natural pause is the only "submit" action.  Keeping this here,
+          // rather than a button on the art, makes the stage behave like a call.
+          if (stageRef.current === 'pitching' && pitchRef.current.trim().split(/\s+/).length >= 12) {
+            if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
+            pitchSilenceTimer.current = window.setTimeout(() => {
+              if (stageRef.current === 'pitching') void beginDeliberationRef.current()
+            }, PITCH_SILENCE_MS)
+          }
+        },
         onPartial: setPartial,
         onUtterance: (text) => void handleUtterance(text),
         onError: (reason) => {
@@ -401,6 +448,8 @@ export default function App() {
     unsubscribeRef.current = null
     if (answerTimer.current) window.clearTimeout(answerTimer.current)
     if (advanceTimer.current) window.clearTimeout(advanceTimer.current)
+    if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
+    pitchSilenceTimer.current = null
     if (sessionRef.current) void finishRemoteSession(sessionRef.current)
     setSpeakingJuror(null)
     setListening(false)
@@ -419,7 +468,6 @@ export default function App() {
       if (event.key.toLowerCase() === 'm') { stopAudio(); setMuted((current) => !current) }
       if (event.key === 'Escape' && stage !== 'intro') endSession()
       if (event.code === 'Space' && stage === 'ready') { event.preventDefault(); void beginSession() }
-      if (event.code === 'Space' && stage === 'pitching') { event.preventDefault(); void beginDeliberationRef.current() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -435,6 +483,8 @@ export default function App() {
     answerRef.current = ''
     turnsRef.current = []
     turnIndexRef.current = 0
+    if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
+    pitchSilenceTimer.current = null
     setDeliberation(null)
     setEvidence([])
     setTrace([])
@@ -448,6 +498,8 @@ export default function App() {
   const onStage = stage === 'pitching' || stage === 'deliberating' || stage === 'panel'
   const activeAccent = focusJuror ? JUROR_BY_ID[focusJuror].accent : '#5b87a8'
   const verdict = deliberation?.verdict
+  const scorecards = useMemo(() => scorePitch(pitch, evidence, deliberation?.ledger.findings ?? []), [deliberation, evidence, pitch])
+  const overallScore = Math.round(scorecards.reduce((total, card) => total + card.score, 0) / scorecards.length)
 
   return <main className={`app day-sky stage-${stage}`} style={{ '--active-accent': activeAccent } as CSSProperties}>
     <Cloudscape />
@@ -509,13 +561,10 @@ export default function App() {
           <span className={`live-dot ${listening ? 'recording' : ''}`} />
           {speakingJuror ? `${JUROR_BY_ID[speakingJuror].name.toUpperCase()} — ${cue.toUpperCase()}` : cue.toUpperCase()}
           <span className="connection-state">{connection === 'connected' ? 'CONNECTED' : connection === 'checking' ? 'CHECKING' : connection === 'demo-fallback' ? 'DEMO FALLBACK' : 'OFFLINE'}</span>
-          <button onClick={() => { stopAudio(); setMuted((value) => !value) }}>{muted ? 'UNMUTE' : 'MUTE'}</button>
         </div>
         <div className="cue-body">
           <div className="wave" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div>
           <p>{partial || caption || 'Pitch your idea.'}</p>
-          {stage === 'pitching' && <button className="end-pitch" onClick={() => void beginDeliberationRef.current()}>I’M DONE <i>→</i></button>}
-          {stage === 'panel' && speakingJuror && <span className="barge-hint">Just start talking to interrupt</span>}
         </div>
       </div>
       {notice && <p className="stage-notice">{notice}</p>}
@@ -523,8 +572,10 @@ export default function App() {
 
     {stage === 'verdict' && <section className="verdict-screen">
       <Wordmark />
-      <div className="verdict-copy">
-        <p>THE JURY’S VERDICT</p>
+      <div className="scoreboard">
+        <div className="scoreboard-intro">
+        <p>THE JURY’S SCORECARD</p>
+        <div className="overall-score"><b>{overallScore}</b><span>/ 100<br />OVERALL</span></div>
         <h2>{verdict?.headline ?? `${caseName} has a pulse.`}</h2>
         <span>{verdict?.summary ?? 'The jury found a version worth building. Keep the pressure; cut the platform.'}</span>
         <div className="ally-note">
@@ -548,6 +599,16 @@ export default function App() {
             {item.sourceUrl && <a href={item.sourceUrl} target="_blank" rel="noreferrer">{item.title || item.sourceUrl}</a>}
           </li>)}</ul>
         </div>}
+        </div>
+        <div className="juror-score-grid">{scorecards.map((card) => {
+          const juror = JUROR_BY_ID[card.juror]
+          return <article className="juror-score" key={card.juror} style={{ '--score-color': juror.accent } as CSSProperties}>
+            <div className="score-card-head"><span>{juror.name}<small>{juror.role}</small></span><strong>{card.score}<i>/100</i></strong></div>
+            <p>{card.summary}</p>
+            <div className="criteria-list">{card.criteria.map((criterion) => <div key={criterion.label}><span>{criterion.label}</span><b>{criterion.score}/{criterion.max}</b><i><em style={{ width: `${(criterion.score / criterion.max) * 100}%` }} /></i></div>)}</div>
+            <footer><b>NEXT MOVE</b>{card.action}</footer>
+          </article>
+        })}</div>
         <button className="sun-button" onClick={restart}>TRY ANOTHER IDEA <i>→</i></button>
       </div>
       <JurySky subdued />
