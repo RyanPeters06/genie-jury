@@ -1,30 +1,29 @@
 {
-  "name": "hack-the-north",
+  "name": "genie-jury",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:full": "concurrently -k -n vite,worker,research -c cyan,magenta,yellow \"npm run dev\" \"npm run worker:dev\" \"npm run research:dev\"",
+    "dev:full": "concurrently -k -n vite,api -c cyan,magenta \"npm run dev\" \"npm run api:dev\"",
+    "api:dev": "node --watch server/index.ts",
+    "api:start": "node server/index.ts",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "worker:dev": "wrangler dev --local --port 8790",
-    "worker:typecheck": "tsc -p worker/tsconfig.json",
-    "worker:deploy": "wrangler deploy",
-    "research:dev": "node research-runner/index.mjs",
-    "setup:browserbase": "node scripts/setup-browserbase.mjs",
-    "setup:elevenlabs": "node scripts/setup-elevenlabs.mjs",
+    "typecheck": "tsc -p server/tsconfig.json && tsc -p tsconfig.app.json",
     "test": "vitest run",
-    "smoke:live": "node scripts/live-smoke.mjs"
+    "smoke:live": "node scripts/live-smoke.mjs",
+    "demo:jury": "node scripts/demo-jury.mjs"
   },
   "dependencies": {
+    "@browserbasehq/sdk": "^2.20.0",
+    "@browserbasehq/stagehand": "^4.1.0",
     "playwright-core": "^1.63.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260919.1",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
@@ -33,7 +32,6 @@
     "oxlint": "^1.81.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
-    "vitest": "^5.0.1",
-    "wrangler": "^4.135.0"
+    "vitest": "^5.0.1"
   }
 }
