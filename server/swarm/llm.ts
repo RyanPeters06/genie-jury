@@ -34,18 +34,23 @@ interface OutputItem {
 interface ResponsesPayload { id: string; output?: OutputItem[]; output_text?: string }
 
 const ENDPOINT = 'https://api.openai.com/v1/responses'
+/** No model call may stall the stage; a slow one is treated as unavailable. */
+const REQUEST_TIMEOUT_MS = 30000
 
 export function llmAvailable(env: SwarmEnv) { return Boolean(env.OPENAI_API_KEY) }
 
 async function call(env: SwarmEnv, body: Record<string, unknown>): Promise<ResponsesPayload | null> {
   if (!env.OPENAI_API_KEY) return null
-  const response = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: env.OPENAI_MODEL ?? 'gpt-5-mini', ...body }),
-  })
-  if (!response.ok) return null
-  return response.json() as Promise<ResponsesPayload>
+  try {
+    const response = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: env.OPENAI_MODEL ?? 'gpt-5-mini', ...body }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+    if (!response.ok) return null
+    return await response.json() as ResponsesPayload
+  } catch { return null }
 }
 
 function textOf(payload: ResponsesPayload) {

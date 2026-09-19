@@ -4,6 +4,18 @@ import { llmAvailable } from './llm.ts'
 import type { DeliberationResult, JurorId, JurorTurn, LedgerSnapshot, RunNode, SwarmEnv, SwarmRuntime, Verdict } from './types.ts'
 
 /**
+ * A stage that overruns is cut short rather than left to hang. Whatever the
+ * agents already posted to the ledger is enough for the jury to speak from,
+ * so an unresponsive page never costs the demo its panel.
+ */
+const INVESTIGATION_DEADLINE_MS = 70000
+
+function withDeadline<T>(ms: number, work: Promise<T>): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout>
+  return Promise.race([work.catch(() => null), new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), ms) })]).finally(() => clearTimeout(timer))
+}
+
+/**
  * The swarmflow. Deterministic stages, handoffs between them, parallel agents
  * inside a stage. Mirrors the JiuwenSwarm Leader / stage agents / handoff
  * pattern.
@@ -34,12 +46,14 @@ export async function deliberate(pitch: string, mode: 'Hackathon' | 'Startup', e
   })
 
   await ledger.span('stage', 'system', 'Investigate in parallel', async (stage) => {
-    await Promise.all(SPEAKING_ORDER.map((juror) => ledger.span('agent', juror, `${JURORS[juror].name} investigates`, async (node) => {
+    const work = Promise.all(SPEAKING_ORDER.map((juror) => ledger.span('agent', juror, `${JURORS[juror].name} investigates`, async (node) => {
       ledger.trackAgentSpan(juror, node)
       const findings = await investigate(juror, ledger, env)
       ledger.finish(node, 'done', { findings: findings.map((finding) => finding.summary) })
       ledger.trackAgentSpan(juror, null)
-    }, { parent: stage })))
+    }, { parent: stage }).catch(() => undefined)))
+    const finished = await withDeadline(INVESTIGATION_DEADLINE_MS, work)
+    if (finished === null) ledger.finish(stage, 'done', { note: 'Cut short on the deadline; the jury speaks from what was already found.' })
   })
 
   await ledger.span('handoff', 'gale', 'Gale services the research queue', async (node) => {
