@@ -1,0 +1,365 @@
+/*
+ * Stage furniture added for the live agent demo: the Browserbase dock, the jury
+ * room trace, provider status, and the receipts on the verdict screen. The sky
+ * and the jurors stay the hero; these panels sit at the edges and stay quiet
+ * until an agent actually does something.
+ */
+
+/* ---- provider status on the intro screen ---- */
+.service-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 18px;
+  max-width: 470px;
+}
+.service-strip span {
+  align-items: center;
+  background: #ffffffa8;
+  border: 1px solid #ffffff;
+  border-radius: 99px;
+  color: #44637e;
+  display: flex;
+  font: 600 9px "DM Mono";
+  gap: 6px;
+  letter-spacing: 0.07em;
+  padding: 6px 11px;
+}
+.service-strip i {
+  background: #9db4c5;
+  border-radius: 50%;
+  height: 6px;
+  width: 6px;
+}
+.service-strip .ok i { background: #3fae72; box-shadow: 0 0 0 3px #3fae7233; }
+.service-strip .off i { background: #d08a4a; }
+
+/* ---- Browserbase dock ---- */
+.bb-dock {
+  left: clamp(16px, 2.4vw, 34px);
+  max-width: min(374px, 33vw);
+  position: absolute;
+  top: 78px;
+  width: 100%;
+  z-index: 11;
+}
+.bb-head {
+  align-items: center;
+  background: #0e2740f0;
+  border: 2px solid #0e2740;
+  border-radius: 13px;
+  box-shadow: 0 5px 0 #0e274055;
+  color: #e6f3fb;
+  cursor: pointer;
+  display: flex;
+  gap: 9px;
+  padding: 9px 12px;
+  width: 100%;
+}
+.bb-badge {
+  align-items: center;
+  color: #ffd27a;
+  display: flex;
+  font: 700 9px "DM Mono";
+  gap: 6px;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+}
+.bb-dot {
+  background: #6f8ca5;
+  border-radius: 50%;
+  height: 7px;
+  width: 7px;
+}
+.bb-dot.live {
+  animation: pulse 1.1s infinite;
+  background: #ff6a3d;
+  box-shadow: 0 0 0 0 #ff6a3d;
+}
+.bb-status {
+  color: #a9c8de;
+  flex: 1;
+  font: 600 9px "DM Mono";
+  letter-spacing: 0.08em;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bb-toggle {
+  color: #ffd27a;
+  font: 700 9px "DM Mono";
+  letter-spacing: 0.1em;
+}
+.bb-body {
+  background: #f8fcffef;
+  border: 2px solid #0e2740;
+  border-radius: 13px;
+  box-shadow: 0 6px 0 #0e274033;
+  margin-top: 7px;
+  overflow: hidden;
+}
+.bb-frame {
+  aspect-ratio: 16 / 10;
+  background: #0b1b2b;
+  position: relative;
+  width: 100%;
+}
+.bb-frame iframe,
+.bb-frame img {
+  border: 0;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+  width: 100%;
+}
+.bb-empty {
+  align-items: center;
+  color: #9db9d1;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  height: 100%;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
+}
+.bb-empty b { color: #e4f1fb; font: 700 11px "DM Mono"; letter-spacing: 0.1em; }
+.bb-empty span { font: 500 11px/1.5 "DM Sans"; }
+.bb-url {
+  background: #0b1b2bd9;
+  border-radius: 99px;
+  bottom: 8px;
+  color: #cfe6f6;
+  font: 600 9px "DM Mono";
+  left: 8px;
+  padding: 4px 9px;
+  position: absolute;
+}
+.bb-meta { padding: 10px 12px 12px; }
+.bb-meta p {
+  color: #2d5271;
+  font: 500 11px/1.45 "DM Sans";
+  margin: 0 0 7px;
+}
+.bb-meta p b {
+  color: #7b93a8;
+  display: block;
+  font: 700 8px "DM Mono";
+  letter-spacing: 0.13em;
+  margin-bottom: 2px;
+}
+.bb-hits {
+  list-style: none;
+  margin: 0 0 9px;
+  padding: 0;
+}
+.bb-hits li { margin-bottom: 5px; }
+.bb-hits a {
+  color: #2f6ea3;
+  display: block;
+  font: 600 11px "DM Sans";
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bb-hits small { color: #90a6b8; font: 500 9px "DM Mono"; }
+.bb-verdict {
+  border-left: 3px solid #9db4c5;
+  padding-left: 9px;
+}
+.bb-verdict b {
+  display: block;
+  font: 700 9px "DM Mono";
+  letter-spacing: 0.12em;
+  margin-bottom: 3px;
+}
+.bb-verdict span { color: #2d5271; display: block; font: 500 11px/1.45 "DM Sans"; }
+.bb-verdict a { color: #2f6ea3; display: block; font: 600 10px "DM Sans"; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-verdict.verified { border-color: #3fae72; }
+.bb-verdict.verified b { color: #2f8d5b; }
+.bb-verdict.contested { border-color: #e0973c; }
+.bb-verdict.contested b { color: #b9762a; }
+.bb-verdict.unproven { border-color: #8f9fb0; }
+.bb-verdict.unproven b { color: #6f8091; }
+
+/* ---- jury room trace ---- */
+.trace {
+  bottom: 128px;
+  max-width: min(370px, 32vw);
+  position: absolute;
+  right: clamp(16px, 2.4vw, 34px);
+  width: 100%;
+  z-index: 11;
+}
+.trace-head {
+  align-items: center;
+  background: #ffffffe8;
+  border: 2px solid #31546e;
+  border-radius: 13px;
+  box-shadow: 0 5px 0 #31546e44;
+  color: #2b4a66;
+  cursor: pointer;
+  display: flex;
+  gap: 9px;
+  padding: 9px 12px;
+  width: 100%;
+}
+.trace-head > span:first-child {
+  font: 700 9px "DM Mono";
+  letter-spacing: 0.14em;
+}
+.trace-counts {
+  color: #6d8aa6;
+  flex: 1;
+  font: 600 8px "DM Mono";
+  letter-spacing: 0.07em;
+  text-align: left;
+}
+.trace-toggle { color: #c97a2c; font: 700 9px "DM Mono"; letter-spacing: 0.1em; }
+.trace-list {
+  background: #ffffffef;
+  border: 2px solid #31546e;
+  border-radius: 13px;
+  list-style: none;
+  margin: 7px 0 0;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 8px;
+}
+.trace-empty {
+  color: #7690a7;
+  font: 500 11px/1.5 "DM Sans";
+  padding: 10px;
+}
+.trace-item {
+  border-left: 3px solid var(--agent-accent, #9db4c5);
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+}
+.trace-item i {
+  color: var(--agent-accent, #9db4c5);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.5;
+}
+.trace-item div { min-width: 0; }
+.trace-item b {
+  color: var(--agent-accent, #45617a);
+  display: inline;
+  font: 700 9px "DM Mono";
+  letter-spacing: 0.08em;
+  margin-right: 6px;
+  text-transform: uppercase;
+}
+.trace-item span { color: #2d5271; font: 500 11px/1.4 "DM Sans"; }
+.trace-item small {
+  color: #7690a7;
+  display: block;
+  font: 500 10px/1.4 "DM Sans";
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.trace-item.status-failed { opacity: 0.55; }
+.trace-item.kind-finding { background: #fff8ec; }
+.trace-item.kind-tool { background: #f2f8fd; }
+
+/* ---- stage extras ---- */
+.barge-hint {
+  color: #8aa2b6;
+  font: 600 9px "DM Mono";
+  letter-spacing: 0.08em;
+  margin: 7px 0 0 auto;
+  white-space: nowrap;
+}
+.stage-notice {
+  background: #fff3e2;
+  border: 1px solid #e0b57f;
+  border-radius: 99px;
+  bottom: 8px;
+  color: #9a5f21;
+  font: 600 10px "DM Mono";
+  left: 50%;
+  margin: 0;
+  padding: 7px 14px;
+  position: absolute;
+  transform: translateX(-50%);
+  z-index: 12;
+}
+.sky-juror.talking img { animation: juror-talk 0.6s ease-in-out infinite alternate; }
+.jury-sky.all-listening .sky-juror { opacity: 0.95; }
+
+@keyframes juror-talk {
+  from { transform: translateY(0); }
+  to { transform: translateY(-5px); }
+}
+
+/* ---- verdict extras ---- */
+.ally-note ul {
+  list-style: none;
+  margin: 9px 0 0;
+  padding: 0;
+}
+.ally-note li {
+  color: #35566f;
+  font: 500 12px/1.5 "DM Sans";
+  margin-bottom: 5px;
+}
+.ally-note li b {
+  color: #b9762a;
+  font: 700 8px "DM Mono";
+  letter-spacing: 0.12em;
+  margin-right: 8px;
+}
+.receipts {
+  background: #ffffffbf;
+  border: 2px solid #ffffff;
+  border-radius: 13px;
+  margin: 14px 0;
+  padding: 11px 13px;
+}
+.receipts > b {
+  color: #6d8aa6;
+  display: block;
+  font: 700 8px "DM Mono";
+  letter-spacing: 0.14em;
+  margin-bottom: 7px;
+}
+.receipts ul { list-style: none; margin: 0; padding: 0; }
+.receipts li {
+  border-left: 3px solid #9db4c5;
+  margin-bottom: 8px;
+  padding-left: 9px;
+}
+.receipts li.verified { border-color: #3fae72; }
+.receipts li.contested { border-color: #e0973c; }
+.receipts li i {
+  color: #6f8091;
+  display: block;
+  font: 700 8px "DM Mono";
+  font-style: normal;
+  letter-spacing: 0.12em;
+}
+.receipts li.verified i { color: #2f8d5b; }
+.receipts li.contested i { color: #b9762a; }
+.receipts li span { color: #35566f; font: 500 11px/1.45 "DM Sans"; }
+.receipts li a { color: #2f6ea3; display: block; font: 600 10px "DM Sans"; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 1100px) {
+  .bb-dock { max-width: 300px; }
+  .trace { max-width: 290px; }
+}
+
+@media (max-width: 860px) {
+  .bb-dock,
+  .trace {
+    max-width: none;
+    position: static;
+    width: auto;
+  }
+  .bb-dock { margin: 68px clamp(14px, 4vw, 24px) 0; }
+  .trace { margin: 10px clamp(14px, 4vw, 24px) 200px; }
+  .trace-list { max-height: 34vh; }
+}
