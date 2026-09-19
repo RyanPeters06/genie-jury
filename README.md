@@ -38,11 +38,12 @@ This is the difference between a fun roleplay and an honest decision tool.
 - Live microphone setup, browser speech-recognition path, typed fallback, juror speaker cues, and verdict flow.
 - A deterministic fallback scenario so the demo cannot fail if a sponsor API is slow.
 
-### Milestone 2 — evidence engine ✅ foundation
+### Optional backend experiment — evidence engine foundation
 
-- Cloudflare Worker routes create and retrieve sessions, trigger research, mint Realtime client secrets, and stream a normalized event history through Durable Objects.
-- The Worker calls OpenAI Structured Outputs when configured, then falls back to deterministic claim extraction when it is not.
-- Gale creates a tagged Browserbase session when Browserbase credentials are configured; the local demo remains usable without any sponsor keys.
+- An optional local Worker prototype can create and retrieve sessions, trigger research, mint Realtime client secrets, and stream a normalized event history.
+- It calls OpenAI Structured Outputs when configured, then falls back to deterministic claim extraction when it is not.
+- Gale can create a tagged Browserbase session when credentials and a project ID are configured; the local demo remains usable without any sponsor keys.
+- This is deliberately not a deployment commitment: the frontend voice demo is the primary build, and the backend can later stay on Workers or move to a simpler service once the product direction is settled.
 
 ### Milestone 3 — real Council coordination
 
@@ -63,11 +64,11 @@ For the Huawei submission, persist the agents' messages, evidence handoffs, and 
 
 ### Milestone 5 — deployment and reliability
 
-- Deploy the orchestration runtime to Cloudflare Workers.
-- Use a Durable Object or D1 to retain the pitch, agent messages, evidence states, and final verdict for each session.
-- Add Sentry tracing/logs around research and model calls; keep a static demo scenario as a fallback.
+- Choose a backend only after the live pitch experience has been validated; Workers, a conventional Node service, or a hosted database are all viable.
+- Retain the pitch, agent messages, evidence states, and final verdict for each session in the selected store.
+- Keep the deterministic demo scenario as a fallback and use provider dashboards or lightweight application logs during the weekend.
 
-## Local backend setup
+## Optional local backend setup
 
 ```bash
 copy .dev.vars.example .dev.vars
@@ -76,7 +77,7 @@ npm run worker:dev
 
 Start the Vite app in another terminal with `npm run dev`. To have the browser call the Worker, copy `.env.example` to `.env.local` and leave `VITE_JURY_API_URL=http://127.0.0.1:8787`.
 
-`OPENAI_API_KEY`, `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, and `ELEVENLABS_API_KEY` belong only in `.dev.vars` or Worker secrets. The checked-in `wrangler.toml` deliberately leaves D1 and R2 bindings commented until their Cloudflare resources are created.
+`OPENAI_API_KEY`, `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, and `ELEVENLABS_API_KEY` belong only in `.dev.vars` or your chosen backend's secret store. The checked-in Worker configuration is a local experiment, and its D1/R2 bindings remain commented until a backend is intentionally selected.
 
 ## Sponsor map
 
@@ -86,8 +87,7 @@ Start the Vite app in another terminal with `npm run dev`. To have the browser c
 | Browserbase | Gale researches pitch claims and returns inspectable evidence cards. |
 | Huawei multi-agent | Separate role-specific agents exchange evidence through a moderator. |
 | ElevenLabs | Jurors have responsive, character-specific voices. |
-| Cloudflare | Worker-based orchestration and durable session memory. |
-| Sentry | Trace the live research/model flow and use the findings to improve the app. |
+| Optional backend | The current Worker prototype can orchestrate sessions, but the frontend works independently and the final backend remains an open choice. |
 
 ## Demo script
 
