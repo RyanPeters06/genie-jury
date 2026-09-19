@@ -14,14 +14,14 @@ from rembg import new_session, remove
 
 
 SPRITES = {
-    "ember-listening": (45, 100, 520, 650),
-    "tide-listening": (570, 100, 990, 650),
-    "gale-listening": (1070, 100, 1500, 650),
-    "volt-listening": (1550, 110, 2000, 650),
-    "ember-speaking": (45, 665, 530, 1180),
-    "tide-speaking": (560, 665, 1020, 1180),
-    "gale-speaking": (1050, 665, 1530, 1180),
-    "volt-speaking": (1530, 665, 2010, 1180),
+    "ember-listening": (45, 100, 520, 690),
+    "tide-listening": (570, 100, 990, 690),
+    "gale-listening": (1070, 100, 1500, 690),
+    "volt-listening": (1550, 110, 2000, 690),
+    "ember-speaking": (45, 665, 530, 1270),
+    "tide-speaking": (560, 665, 1020, 1270),
+    "gale-speaking": (1050, 665, 1530, 1270),
+    "volt-speaking": (1530, 665, 2010, 1270),
 }
 
 
@@ -48,7 +48,7 @@ def remove_chroma_green(source: Image.Image) -> Image.Image:
     return rgba
 
 
-def remove_isolated_specks(source: Image.Image, minimum_pixels: int = 12) -> Image.Image:
+def remove_isolated_specks(source: Image.Image, minimum_pixels: int = 100) -> Image.Image:
     """Discard tiny disconnected generator artifacts while retaining real cues."""
     rgba = source.convert("RGBA")
     alpha = rgba.getchannel("A")
@@ -85,6 +85,20 @@ def remove_isolated_specks(source: Image.Image, minimum_pixels: int = 12) -> Ima
     return rgba
 
 
+def trim_transparent_padding(source: Image.Image, padding: int = 12) -> Image.Image:
+    """Keep a small breathing room while removing unused keyed background."""
+    bounds = source.getchannel("A").getbbox()
+    if bounds is None:
+        return source
+    left, top, right, bottom = bounds
+    return source.crop((
+        max(0, left - padding),
+        max(0, top - padding),
+        min(source.width, right + padding),
+        min(source.height, bottom + padding),
+    ))
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         raise SystemExit("usage: python scripts/extract_jurors.py <sprite-sheet> <output-dir>")
@@ -100,7 +114,7 @@ def main() -> None:
             if use_chroma_key
             else remove(sprite, session=session, alpha_matting=True, alpha_matting_foreground_threshold=240, alpha_matting_background_threshold=10, alpha_matting_erode_size=5)
         )
-        transparent.save(output_dir / f"{name}.png", optimize=True)
+        trim_transparent_padding(transparent).save(output_dir / f"{name}.png", optimize=True)
 
 
 if __name__ == "__main__":
