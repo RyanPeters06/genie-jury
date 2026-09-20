@@ -43,7 +43,21 @@ export class Ledger {
     ledger.toolCalls.push(...snapshot.toolCalls)
     ledger.builderAnswers.push(...snapshot.builderAnswers)
     ledger.runTree.push(...runTree)
+    // A rehydrated ledger must remember that the guaranteed deep read was
+    // already spent, or every builder answer buys another one.
+    ledger.deepReadDone = snapshot.evidence.some((item) => Boolean(item.interaction))
     return ledger
+  }
+
+  /**
+   * One guaranteed interactive read per deliberation. Synchronous test-and-set,
+   * so two agents racing for the budget cannot both win it.
+   */
+  private deepReadDone = false
+  claimDeepRead(): boolean {
+    if (this.deepReadDone) return false
+    this.deepReadDone = true
+    return true
   }
 
   // ---- blackboard writes -------------------------------------------------
@@ -57,7 +71,10 @@ export class Ledger {
   addEvidence(evidence: Evidence) {
     this.evidence.push(evidence)
     const claim = evidence.claimId ? this.claims.find((item) => item.id === evidence.claimId) : undefined
-    if (claim) claim.evidenceStatus = evidence.status
+    // Only an adjudicated item may move a claim. Without this, a later
+    // observation of the same claim silently downgrades a verified verdict, and
+    // the jury then says "unproven" on stage about something it already proved.
+    if (claim && evidence.judged) claim.evidenceStatus = evidence.status
     this.emit('ledger.evidence', { evidence: { ...evidence, screenshotDataUrl: undefined }, hasScreenshot: Boolean(evidence.screenshotDataUrl) })
     return evidence
   }

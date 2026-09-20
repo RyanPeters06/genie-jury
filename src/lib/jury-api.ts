@@ -5,7 +5,8 @@ export type Vote = 'BUILD' | 'PIVOT' | 'PROVE' | 'ROASTED'
 
 export type RemoteSession = { id: string; mode: 'Hackathon' | 'Startup'; pitch: string; stage: string; browser: { sessionId: string | null; liveViewUrl: string | null } | null }
 export type JurorTurn = { juror: JurorId; line: string; cue: string; basedOn: { findingIds: string[]; evidenceIds: string[]; messagesFrom: string[] } }
-export type Evidence = { claimId?: string; query?: string; status: EvidenceStatus; sourceUrl?: string; title?: string; excerpt?: string; rationale?: string; sources?: Array<{ title: string; url: string; snippet: string }>; screenshotDataUrl?: string; capturedAt: string; screenshotCaptured: boolean; requestedBy?: string }
+/** Mirrors Evidence in server/swarm/types.ts; keep the two in step. */
+export type Evidence = { claimId?: string; query?: string; status: EvidenceStatus; sourceUrl?: string; title?: string; excerpt?: string; rationale?: string; sources?: Array<{ title: string; url: string; snippet: string }>; screenshotDataUrl?: string; capturedAt: string; screenshotCaptured: boolean; requestedBy?: string; via?: 'live' | 'fetch' | 'search'; judged?: boolean; interaction?: { instruction: string; acted: string; extracted?: string; quotes?: string[] } }
 export type Finding = { id: string; agent: string; kind: string; summary: string; claimId?: string; severity: number; createdAt: string }
 export type AgentMessage = { id: string; from: string; to: string; kind: string; payload: Record<string, unknown>; createdAt: string }
 export type RunNode = { id: string; parentId: string | null; kind: string; agent: string; label: string; status: string; startedAt: string; endedAt?: string; data?: Record<string, unknown> }
@@ -105,7 +106,7 @@ export function subscribeToStage(sessionId: string, onEvent: (event: StageEvent)
   const handler = (event: MessageEvent) => {
     try { onEvent(JSON.parse(event.data) as StageEvent) } catch { /* ignore malformed frames */ }
   }
-  const types = ['session.stage', 'pitch.updated', 'pitch.invalid', 'juror.interjects', 'deliberation.ready', 'deliberation.failed', 'juror.replied', 'juror.turn', 'juror.audio', 'ledger.node', 'ledger.finding', 'ledger.evidence', 'ledger.message', 'browser.session', 'browser.search', 'browser.navigate', 'browser.screenshot', 'browser.act', 'browser.extract', 'browser.closed', 'browser.error']
+  const types = ['session.stage', 'pitch.updated', 'pitch.invalid', 'juror.interjects', 'deliberation.ready', 'deliberation.failed', 'juror.replied', 'juror.turn', 'juror.audio', 'ledger.node', 'ledger.finding', 'ledger.evidence', 'ledger.message', 'browser.session', 'browser.search', 'browser.fetch', 'browser.navigate', 'browser.screenshot', 'browser.act', 'browser.extract', 'browser.closed', 'browser.error']
   for (const type of types) source.addEventListener(type, handler as EventListener)
   return () => source.close()
 }

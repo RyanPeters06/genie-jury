@@ -20,7 +20,9 @@ const decoder = new TextDecoder()
 void (async () => {
   let buffer = ''
   for (;;) {
-    const { done, value } = await reader.read()
+    // The stream is cut when the session closes; that is a normal ending here,
+    // not a failure worth taking the whole report down for.
+    const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }))
     if (done) break
     buffer += decoder.decode(value, { stream: true })
     const frames = buffer.split('\n\n')
@@ -52,7 +54,7 @@ for (const call of ledger.toolCalls) console.log(`  ${call.agent.padEnd(6)} ${ca
 heading('MESSAGES BETWEEN AGENTS')
 for (const message of ledger.messages) console.log(`  ${message.from} → ${message.to}  ${message.kind.padEnd(16)} ${JSON.stringify(message.payload).slice(0, 110)}`)
 
-heading('EVIDENCE FROM THE LIVE BROWSER')
+heading('EVIDENCE GATHERED')
 for (const item of ledger.evidence) console.log(`  ${item.status.toUpperCase().padEnd(10)} ${item.sourceUrl ?? '(no source)'}\n    ${item.rationale ?? ''}\n    requested by ${item.requestedBy}, screenshot ${item.screenshotCaptured ? 'captured' : 'none'}`)
 
 heading('FINDINGS ON THE SHARED LEDGER')

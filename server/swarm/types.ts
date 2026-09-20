@@ -28,6 +28,14 @@ export interface Claim {
 
 export interface SourceHit { title: string; url: string; snippet: string }
 
+/** What an agent did to a page when the answer sat behind a click. */
+export interface PageInteraction {
+  instruction: string
+  acted: string
+  extracted?: string
+  quotes?: string[]
+}
+
 export interface Evidence {
   claimId?: string
   query?: string
@@ -41,6 +49,15 @@ export interface Evidence {
   capturedAt: string
   screenshotCaptured: boolean
   requestedBy?: AgentId
+  /** How the page was read. A fetched page has no screenshot and no live view. */
+  via?: 'live' | 'fetch' | 'search'
+  /**
+   * True only when a model adjudicated this against a claim. Reading a page is
+   * an observation, not a judgement, and only a judged item may move a claim's
+   * status.
+   */
+  judged?: boolean
+  interaction?: PageInteraction
 }
 
 /** One juror's assignment from the Bailiff: the angle it owns for this pitch. */
@@ -155,10 +172,16 @@ export interface SwarmEvent { type: string; at: string; data: Record<string, unk
 export interface WebBrowser {
   readonly active: boolean
   readonly liveViewUrl: string | null
+  /**
+   * `act` and `extract` only work under Stagehand. Read this AFTER `open()`
+   * resolves; before that it is always 'closed'.
+   */
+  readonly mode: 'stagehand' | 'playwright' | 'closed'
   open(): Promise<unknown>
   capture(url: string, options?: { screenshot?: boolean }): Promise<{ url: string; finalUrl: string; title: string; excerpt: string; screenshotDataUrl?: string; capturedAt: string }>
-  act(instruction: string): Promise<{ ok: boolean; message: string }>
-  extract(instruction: string): Promise<{ answer: string; quotes: string[] } | null>
+  /** `budgetMs` must reach the browser's own queue, or an abandoned call keeps the lock. */
+  act(instruction: string, budgetMs?: number): Promise<{ ok: boolean; message: string }>
+  extract(instruction: string, budgetMs?: number): Promise<{ answer: string; quotes: string[] } | null>
   close(): Promise<void>
 }
 
@@ -166,4 +189,9 @@ export interface SwarmRuntime {
   emit: (event: SwarmEvent) => void
   search?: (query: string, agent: AgentId, numResults?: number) => Promise<SourceHit[]>
   browser?: (agent: AgentId) => WebBrowser
+  /**
+   * Read a page without a browser session. Jurors who do not need the live view
+   * use this so they stop queueing behind the one agent that does.
+   */
+  fetchPage?: (url: string, agent: AgentId) => Promise<{ finalUrl: string; title: string; text: string } | null>
 }

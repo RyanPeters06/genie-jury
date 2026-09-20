@@ -2,6 +2,7 @@ import { chromium } from 'playwright-core'
 import type { Browser, Page as PlaywrightPage } from 'playwright-core'
 import type { Page as StagehandPage, Stagehand, StagehandBrowser } from '@browserbasehq/stagehand'
 import type { Env } from './env.ts'
+import type { WebBrowser } from './swarm/types.ts'
 
 /**
  * Gale's hands on the web: Browserbase.
@@ -23,7 +24,7 @@ import type { Env } from './env.ts'
 export interface SearchResult { title: string; url: string; snippet: string }
 
 export interface BrowserEvent {
-  type: 'browser.session' | 'browser.search' | 'browser.navigate' | 'browser.screenshot' | 'browser.act' | 'browser.extract' | 'browser.closed' | 'browser.error'
+  type: 'browser.session' | 'browser.search' | 'browser.fetch' | 'browser.navigate' | 'browser.screenshot' | 'browser.act' | 'browser.extract' | 'browser.closed' | 'browser.error'
   at: string
   agent: string
   data: Record<string, unknown>
@@ -58,6 +59,7 @@ const SESSION_TIMEOUT_S = 300
 const OPEN_MS = 25000
 const CAPTURE_MS = 28000
 const ACT_MS = 30000
+const FETCH_MS = 9000
 
 class TimeoutError extends Error {
   constructor(what: string, ms: number) { super(`${what} timed out after ${ms}ms`) }
@@ -94,18 +96,62 @@ export async function searchWeb(query: string, ctx: BrowserbaseContext, numResul
   }
 }
 
-/** Browserbase Fetch API: page content without a browser session, for quick reads. */
-export async function fetchPage(url: string, ctx: BrowserbaseContext): Promise<{ statusCode: number; content: string } | null> {
+/**
+ * Browserbase Fetch API: a page's content without a browser session. Jurors who
+ * do not need the live view read through this, so they stop queueing behind the
+ * one juror who does.
+ */
+export async function fetchPage(url: string, ctx: BrowserbaseContext, options: { timeoutMs?: number; actor?: string } = {}): Promise<{ statusCode: number; content: string; format: 'markdown' | 'raw' } | null> {
   if (!ctx.env.BROWSERBASE_API_KEY) return null
-  try {
-    const response = await fetch('https://api.browserbase.com/v1/fetch', { method: 'POST', headers: headers(ctx.env), body: JSON.stringify({ url, allowRedirects: true, format: 'markdown' }) })
+  const actor = options.actor ?? ctx.agent
+  const started = Date.now()
+  const once = async (format: 'markdown' | 'raw') => {
+    const response = await fetch('https://api.browserbase.com/v1/fetch', {
+      method: 'POST', headers: headers(ctx.env),
+      body: JSON.stringify({ url, allowRedirects: true, format }),
+      signal: AbortSignal.timeout(options.timeoutMs ?? FETCH_MS),
+    })
     if (!response.ok) throw new Error(`fetch ${response.status}`)
     const payload = await response.json() as { statusCode: number; content: unknown }
-    return { statusCode: payload.statusCode, content: typeof payload.content === 'string' ? payload.content : JSON.stringify(payload.content) }
+    return { statusCode: payload.statusCode, content: typeof payload.content === 'string' ? payload.content : JSON.stringify(payload.content), format }
+  }
+  try {
+    // Markdown is far cheaper to feed a model, but some pages render empty
+    // through it. Raw still has the text, and one more request is much cheaper
+    // than falling all the way back to a live browser session.
+    let result = await once('markdown')
+    if (result.content.trim().length < 400) result = await once('raw')
+    ctx.emit({ type: 'browser.fetch', at: now(), agent: actor, data: { url, statusCode: result.statusCode, format: result.format, chars: result.content.length, durationMs: Date.now() - started } })
+    return result
   } catch (error) {
-    ctx.emit({ type: 'browser.error', at: now(), agent: ctx.agent, data: { step: 'fetch', url, error: String(error) } })
+    ctx.emit({ type: 'browser.error', at: now(), agent: actor, data: { step: 'fetch', url, error: String(error) } })
     return null
   }
+}
+
+/** Fetch returns markdown; give it the same shape a live capture yields. */
+export function readableFromMarkdown(url: string, markdown: string): { finalUrl: string; title: string; text: string } {
+  // Raw fetches arrive as HTML; drop the machinery before anything reads it.
+  if (/<\/?(html|body|script|div|p)/i.test(markdown)) {
+    markdown = markdown
+      .replace(/<(script|style|noscript)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+  }
+  const lines = markdown.split(/\r?\n/)
+  const heading = lines.find((line) => line.startsWith('# '))?.slice(2).trim()
+  const firstLine = lines.find((line) => line.trim().length > 0 && line.trim().length < 120)?.trim()
+  let host = url
+  try { host = new URL(url).hostname.replace(/^www\./, '') } catch { /* keep the raw url */ }
+  const text = markdown
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[#*_>`]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 2400)
+  return { finalUrl: url, title: heading || firstLine || host, text }
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +174,32 @@ export class LiveBrowser {
   get active() { return Boolean(this.sessionId) }
   get mode(): 'stagehand' | 'playwright' | 'closed' { return this.stagehand ? 'stagehand' : this.connectUrl ? 'playwright' : 'closed' }
 
+  /**
+   * A per-juror handle onto the one shared session. The actor is captured
+   * lexically per call, so events name whoever queued the work rather than
+   * whoever opened the session first. Storing the actor on the instance would
+   * not work: operations wait in `locked`, so a later caller would overwrite
+   * the name before an earlier one finished emitting. The getters read through
+   * to the live object, keeping `active` and `mode` current.
+   */
+  viewFor(agent: string): WebBrowser {
+    // Arrows capture `this` lexically, so the handle stays a thin pass-through
+    // and the getters keep reading the live session rather than a snapshot.
+    const active = () => this.active
+    const liveViewUrl = () => this.liveViewUrl
+    const mode = () => this.mode
+    return {
+      get active() { return active() },
+      get liveViewUrl() { return liveViewUrl() },
+      get mode() { return mode() },
+      open: () => this.open(agent),
+      capture: (url, options) => this.capture(url, options, agent),
+      act: (instruction, budgetMs) => this.act(instruction, budgetMs, agent),
+      extract: (instruction, budgetMs) => this.extract(instruction, budgetMs, agent),
+      close: () => this.close(agent),
+    }
+  }
+
   /** Jurors share one browser; serialise their use of it. */
   private locked<T>(label: string, ms: number, work: () => Promise<T>): Promise<T> {
     const next = this.queue.then(() => withTimeout(label, ms, work()), () => withTimeout(label, ms, work()))
@@ -135,12 +207,12 @@ export class LiveBrowser {
     return next
   }
 
-  async open() {
+  async open(actor: string = this.ctx.agent) {
     return this.locked('browser.open', OPEN_MS, async () => {
       if (this.sessionId) return this
       const { env } = this.ctx
       if (!browserbaseConfigured(env)) throw new Error('Browserbase is not configured')
-      const sessionParams = { projectId: env.BROWSERBASE_PROJECT_ID!, timeout: SESSION_TIMEOUT_S, browserSettings: { viewport: { width: 1280, height: 800 }, blockAds: true }, userMetadata: { product: 'genie-jury', agent: this.ctx.agent } }
+      const sessionParams = { projectId: env.BROWSERBASE_PROJECT_ID!, timeout: SESSION_TIMEOUT_S, browserSettings: { viewport: { width: 1280, height: 800 }, blockAds: true }, userMetadata: { product: 'genie-jury', agent: actor } }
 
       if (env.OPENAI_API_KEY) {
         try {
@@ -149,7 +221,7 @@ export class LiveBrowser {
           this.stagehand = await withTimeout('stagehand.create', 15000, Stagehand.create({ browser: this.stagehandBrowser, apiKey: env.BROWSERBASE_API_KEY, model: { modelName: `openai/${env.OPENAI_FAST_MODEL}` as 'openai/gpt-5-mini', apiKey: env.OPENAI_API_KEY }, systemPrompt: 'You are Gale, a skeptical researcher gathering evidence for a pitch jury. Be efficient; dismiss popups and cookie banners without hesitation.' }))
           this.sessionId = this.stagehandBrowser.sessionId ?? null
         } catch (error) {
-          this.ctx.emit({ type: 'browser.error', at: now(), agent: this.ctx.agent, data: { step: 'stagehand.launch', error: String(error) } })
+          this.ctx.emit({ type: 'browser.error', at: now(), agent: actor, data: { step: 'stagehand.launch', error: String(error) } })
           this.stagehand = null
           this.stagehandBrowser = null
         }
@@ -165,7 +237,7 @@ export class LiveBrowser {
 
       const debug = await fetch(`https://api.browserbase.com/v1/sessions/${this.sessionId}/debug`, { headers: headers(env) }).then((response) => (response.ok ? response.json() : null)).catch(() => null) as { debuggerFullscreenUrl?: string; debuggerUrl?: string } | null
       this.liveViewUrl = debug?.debuggerFullscreenUrl ?? debug?.debuggerUrl ?? null
-      this.ctx.emit({ type: 'browser.session', at: now(), agent: this.ctx.agent, data: { sessionId: this.sessionId, liveViewUrl: this.liveViewUrl, mode: this.mode } })
+      this.ctx.emit({ type: 'browser.session', at: now(), agent: actor, data: { sessionId: this.sessionId, liveViewUrl: this.liveViewUrl, mode: this.mode } })
       return this
     })
   }
@@ -183,10 +255,10 @@ export class LiveBrowser {
     return this.playwrightPage
   }
 
-  async capture(url: string, options: { screenshot?: boolean; waitMs?: number } = {}): Promise<PageCapture> {
+  async capture(url: string, options: { screenshot?: boolean; waitMs?: number } = {}, actor: string = this.ctx.agent): Promise<PageCapture> {
     return this.locked('browser.capture', CAPTURE_MS, async () => {
       const page = await this.page()
-      this.ctx.emit({ type: 'browser.navigate', at: now(), agent: this.ctx.agent, data: { url } })
+      this.ctx.emit({ type: 'browser.navigate', at: now(), agent: actor, data: { url } })
       await withTimeout<unknown>('goto', 20000, page.goto(url, { waitUntil: 'domcontentloaded', timeout: 18000 }))
       await page.waitForTimeout(options.waitMs ?? 900).catch(() => undefined)
       const finalUrl = await withTimeout('url', 5000, Promise.resolve(page.url())).catch(() => url)
@@ -197,7 +269,7 @@ export class LiveBrowser {
         const shot = await withTimeout('screenshot', 12000, this.screenshot(page)).catch(() => null)
         if (shot) {
           screenshotDataUrl = `data:image/${shot.type};base64,${Buffer.from(shot.data).toString('base64')}`
-          this.ctx.emit({ type: 'browser.screenshot', at: now(), agent: this.ctx.agent, data: { url: finalUrl, title, screenshotDataUrl } })
+          this.ctx.emit({ type: 'browser.screenshot', at: now(), agent: actor, data: { url: finalUrl, title, screenshotDataUrl } })
         }
       }
       return { url, finalUrl, title, excerpt, screenshotDataUrl, capturedAt: now() }
@@ -220,40 +292,40 @@ export class LiveBrowser {
   }
 
   /** Natural-language action on the current page via Stagehand (same session, so the live view shows it). */
-  async act(instruction: string): Promise<{ ok: boolean; message: string }> {
-    return this.locked('browser.act', ACT_MS, async () => {
+  async act(instruction: string, budgetMs?: number, actor: string = this.ctx.agent): Promise<{ ok: boolean; message: string }> {
+    return this.locked('browser.act', Math.min(ACT_MS, budgetMs ?? ACT_MS), async () => {
       if (!this.stagehand) return { ok: false, message: 'Stagehand is not available in this session.' }
       try {
         const result = await this.stagehand.act(instruction)
         const message = String(result.data?.message ?? (result.data?.success ? 'done' : 'no action taken'))
-        this.ctx.emit({ type: 'browser.act', at: now(), agent: this.ctx.agent, data: { instruction, ok: result.data?.success !== false, message, actions: result.data?.actions?.map((action) => action.description) } })
+        this.ctx.emit({ type: 'browser.act', at: now(), agent: actor, data: { instruction, ok: result.data?.success !== false, message, actions: result.data?.actions?.map((action) => action.description) } })
         return { ok: result.data?.success !== false, message }
       } catch (error) {
-        this.ctx.emit({ type: 'browser.error', at: now(), agent: this.ctx.agent, data: { step: 'act', instruction, error: String(error) } })
+        this.ctx.emit({ type: 'browser.error', at: now(), agent: actor, data: { step: 'act', instruction, error: String(error) } })
         return { ok: false, message: String(error) }
       }
     })
   }
 
   /** Extraction from the current page via Stagehand. */
-  async extract(instruction: string): Promise<{ answer: string; quotes: string[] } | null> {
-    return this.locked('browser.extract', ACT_MS, async () => {
+  async extract(instruction: string, budgetMs?: number, actor: string = this.ctx.agent): Promise<{ answer: string; quotes: string[] } | null> {
+    return this.locked('browser.extract', Math.min(ACT_MS, budgetMs ?? ACT_MS), async () => {
       if (!this.stagehand) return null
       try {
         const result = await this.stagehand.extract(`${instruction}. Answer in two parts: the answer, then up to three short verbatim quotes from the page, each on its own line prefixed with "QUOTE:".`)
         const raw = String(result.data?.extraction ?? '')
         const quotes = [...raw.matchAll(/QUOTE:\s*(.+)/g)].map((match) => match[1].trim()).slice(0, 3)
         const value = { answer: raw.split(/QUOTE:/)[0].trim(), quotes }
-        this.ctx.emit({ type: 'browser.extract', at: now(), agent: this.ctx.agent, data: { instruction, ...value } })
+        this.ctx.emit({ type: 'browser.extract', at: now(), agent: actor, data: { instruction, ...value } })
         return value
       } catch (error) {
-        this.ctx.emit({ type: 'browser.error', at: now(), agent: this.ctx.agent, data: { step: 'extract', instruction, error: String(error) } })
+        this.ctx.emit({ type: 'browser.error', at: now(), agent: actor, data: { step: 'extract', instruction, error: String(error) } })
         return null
       }
     })
   }
 
-  async close() {
+  async close(actor: string = this.ctx.agent) {
     await this.locked('browser.close', 15000, async () => {
       const sessionId = this.sessionId
       await this.stagehand?.close().catch(() => undefined)
@@ -266,7 +338,7 @@ export class LiveBrowser {
       this.connectUrl = null
       if (sessionId) {
         await fetch(`https://api.browserbase.com/v1/sessions/${sessionId}`, { method: 'POST', headers: headers(this.ctx.env), body: JSON.stringify({ projectId: this.ctx.env.BROWSERBASE_PROJECT_ID, status: 'REQUEST_RELEASE' }) }).catch(() => undefined)
-        this.ctx.emit({ type: 'browser.closed', at: now(), agent: this.ctx.agent, data: { sessionId } })
+        this.ctx.emit({ type: 'browser.closed', at: now(), agent: actor, data: { sessionId } })
       }
       this.sessionId = null
       this.liveViewUrl = null

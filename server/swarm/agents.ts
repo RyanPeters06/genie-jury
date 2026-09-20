@@ -181,8 +181,10 @@ function deterministicFindings(juror: JurorId, ledger: Ledger): DraftFinding[] {
 export async function serviceResearchRequests(ledger: Ledger, env: SwarmEnv, limit = 2) {
   const requests = ledger.inbox('gale', 'research.request').slice(0, limit)
   ledger.consume('gale', requests)
-  const results = []
-  for (const request of requests) {
+  // Run the queue concurrently. Searching and judging overlap freely; the parts
+  // that need the one live browser still serialise inside it, so this is safe
+  // and removes several seconds of dead air before the jury speaks.
+  return Promise.all(requests.map(async (request) => {
     const query = String(request.payload.query ?? '')
     const claimId = typeof request.payload.claimId === 'string' ? request.payload.claimId : undefined
     const started = Date.now()
@@ -191,9 +193,8 @@ export async function serviceResearchRequests(ledger: Ledger, env: SwarmEnv, lim
     ledger.recordTool({ agent: 'gale', tool: 'research_claim', args: { query, claimId, onBehalfOf: request.from }, result: { status: evidence.status, sourceUrl: evidence.sourceUrl, rationale: evidence.rationale }, ok: true, durationMs: Date.now() - started })
     ledger.send('gale', request.from, 'research.result', { query, status: evidence.status, title: evidence.title, sourceUrl: evidence.sourceUrl, excerpt: evidence.excerpt })
     ledger.postFinding('gale', { kind: 'evidence', summary: `${request.from} asked me to check "${query}": ${evidence.status}${evidence.title ? ` — ${evidence.title}` : ''}.`, severity: evidence.status === 'verified' ? 1 : 2, claimId })
-    results.push(evidence)
-  }
-  return results
+    return evidence
+  }))
 }
 
 // ---------------------------------------------------------------------------

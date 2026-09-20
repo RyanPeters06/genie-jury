@@ -43,4 +43,16 @@ ElevenLabs gives each juror a deliberately cast, emotionally distinct voice so t
 
 ### Huawei openJiuwen multi-agent challenge
 
-Genie Jury’s four specialists divide responsibility across build feasibility, evidence verification, user pain, and pitch clarity; a coordinator chooses the next question and keeps the panel from overlapping the builder. To enter this track, we will run that explicit role-based communication and orchestration through openJiuwen/WorkSwarm, making the collaboration inspectable rather than a chain of generic prompts.
+Genie Jury is a working multi-agent system, not four prompts in a row, and the collaboration is inspectable on screen while it happens.
+
+A Bailiff agent acts as the Leader. It decomposes the pitch into ranked claims and assigns each juror one non-overlapping angle, so the four specialists cover build feasibility, evidence verification, user pain, and the cross-cutting flaw without repeating each other. The four then investigate in parallel, each with a different toolset, writing findings to a shared ledger rather than passing text between prompts.
+
+The load-bearing collaboration is delegation. Only Gale holds the live browser, so a juror that hits a factual claim outside its own mandate files a research request on the message bus; Gale services that queue and reports back verified, contested, or unproven. Volt speaks last, having received every other juror's line, and builds on what they found instead of restating it. An Ally then synthesises the whole ledger into one plan while each juror votes on it.
+
+Every stage, tool call, inter-agent message, and finding lands in a run tree that streams to the stage live, so a judge can watch the decomposition and the handoffs rather than taking our word for them. One measured run produced ten tool calls, fifteen messages between agents, eleven findings, and four independent sources, including one juror citing another by name on stage because it had received that juror's evidence.
+
+The vocabulary deliberately mirrors openJiuwen and JiuwenSwarm: a Leader that decomposes, stage agents that run in parallel, explicit handoffs between stages, a message bus, and a run tree. `docs/MULTI-AGENT.md` documents the design, and `npm run demo:jury` prints a full deliberation with all of it laid out.
+
+### Browserbase
+
+Browserbase is what lets the jury say "I looked" and mean it. Gale opens a real cloud browser on stage, and the audience watches it search, open the best source, and screenshot it while the verdict chip updates underneath. Three capabilities carry different weight: the Search API finds real sources for any juror, the live session is the one the audience sees, and Stagehand clicks through the page when the answer sits behind a cookie wall or a pricing tab. No human types a query at any point; the agents decide what is worth checking and delegate the web work among themselves. The evidence language is strict, so the most valuable thing the browser can come back with is "unproven".

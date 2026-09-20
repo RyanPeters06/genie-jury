@@ -1,7 +1,7 @@
 import type { Ledger } from './ledger.ts'
 import { structured } from './llm.ts'
 import type { ToolSpec } from './llm.ts'
-import type { AgentId, Evidence, EvidenceStatus, JurorId, SourceHit, SwarmEnv } from './types.ts'
+import type { AgentId, Evidence, EvidenceStatus, JurorId, PageInteraction, SourceHit, SwarmEnv, SwarmRuntime } from './types.ts'
 
 /**
  * Tools the jurors can actually call. Each tool is a real side effect on the
@@ -11,10 +11,10 @@ import type { AgentId, Evidence, EvidenceStatus, JurorId, SourceHit, SwarmEnv } 
  *
  *   read_ledger       everyone   read claims, evidence, other jurors' findings
  *   message_juror     everyone   hand an angle to the juror who owns it
- *   search_web        everyone   Browserbase Search: real results, no browser needed
+ *   search_web        Ember/Tide/Gale  Browserbase Search: real results, no browser needed
  *   research_claim    Gale       Search → open the top source in a live cloud browser → screenshot → judge
  *   act_on_page       Gale       Stagehand: natural-language action on the open page (dismiss, click, scroll)
- *   browse_site       Ember/Tide open one URL in the live browser and read it
+ *   browse_site       Ember/Tide read one URL, via the Fetch API, falling back to the live browser
  *   request_research  Ember/Tide/Volt  file a research request for Gale
  */
 export interface Tool {
@@ -44,37 +44,118 @@ function stripScreenshots(value: unknown): unknown {
   return value
 }
 
+/** Budgets for the guaranteed interactive read. These reach the browser's own
+ * queue, so an abandoned call releases the lock instead of holding it. */
+const ACT_BUDGET_MS = 9000
+const EXTRACT_BUDGET_MS = 9000
+/** Below this, a fetched page is treated as empty and the live browser takes over. */
+const MIN_FETCH_CHARS = 400
+
 /**
- * Gale's full research routine. Search for real sources, open the best one in
- * the live browser, screenshot it, then judge the claim against what the page
+ * Read one page.
+ *
+ * Ember and Tide go through the Browserbase Fetch API so they do not queue
+ * behind Gale on the single live browser; a thin or empty result, which is what
+ * a JavaScript-heavy page returns, falls back to a live capture so quality never
+ * regresses. Gale always passes `preferLive`, because the session on stage is
+ * Gale's and the audience should see it working.
+ */
+export async function readPage(
+  runtime: SwarmRuntime,
+  agent: JurorId,
+  url: string,
+  options: { preferLive?: boolean } = {},
+): Promise<{ finalUrl: string; title: string; excerpt: string; screenshotDataUrl?: string; capturedAt: string; via: 'fetch' | 'live' } | null> {
+  if (!options.preferLive && runtime.fetchPage) {
+    const fetched = await runtime.fetchPage(url, agent)
+    if (fetched && fetched.text.trim().length >= MIN_FETCH_CHARS) {
+      return { finalUrl: fetched.finalUrl, title: fetched.title, excerpt: fetched.text, capturedAt: new Date().toISOString(), via: 'fetch' }
+    }
+  }
+  const browser = runtime.browser?.(agent)
+  if (!browser) return null
+  try {
+    await browser.open()
+    const capture = await browser.capture(url, { screenshot: true })
+    return { finalUrl: capture.finalUrl, title: capture.title, excerpt: capture.excerpt, screenshotDataUrl: capture.screenshotDataUrl, capturedAt: capture.capturedAt, via: 'live' }
+  } catch { return null }
+}
+
+/**
+ * The evidence clerk. The only place a claim earns a status, so that everything
+ * else in the system can treat an unjudged item as an observation.
+ */
+async function judgeEvidence(env: SwarmEnv, input: { claim: string; query: string; sources: SourceHit[]; pageText: string; pageUrl?: string; extraction?: string }) {
+  return structured<{ status: EvidenceStatus; rationale: string; quote: string }>(env, {
+    instructions: 'You are an evidence clerk. Given a claim, search results, and the text of the top source, decide: verified (the source clearly supports the claim), contested (credible sources disagree or the source partly contradicts it), or unproven (nothing here settles it). Never assume; only use the supplied text. An interactive read is a targeted answer taken from the page after dismissing overlays; treat it as more page text, not as a conclusion. "quote" is a short verbatim excerpt from the source text (max 200 chars) or empty. "rationale" is one sentence.',
+    input: `Claim: ${input.claim}
+Query: ${input.query}
+
+Search results:
+${input.sources.map((hit, index) => `${index + 1}. ${hit.title} — ${hit.url} | ${hit.snippet}`).join('\n') || '(none)'}
+
+Top source (${input.pageUrl ?? 'not opened'}):
+${input.pageText.slice(0, 2400) || '(no page text)'}
+${input.extraction ? `\nInteractive read of that page:\n${input.extraction.slice(0, 800)}` : ''}`,
+    schema: { name: 'evidence_judgement', schema: { type: 'object', properties: { status: { type: 'string', enum: ['verified', 'contested', 'unproven'] }, rationale: { type: 'string' }, quote: { type: 'string' } }, required: ['status', 'rationale', 'quote'], additionalProperties: false } },
+  })
+}
+
+/**
+ * Gale's full research routine: search for real sources, open the best one in
+ * the live browser, screenshot it, and judge the claim against what the page
  * actually says. The judge may only answer verified / contested / unproven.
+ *
+ * Once per deliberation this also takes an interactive pass over the page,
+ * dismissing overlays and reading a targeted answer, so the audience reliably
+ * sees the browser being operated rather than merely loaded, and so an answer
+ * hidden behind a click still reaches the verdict.
+ *
+ * `requestedBy` is whoever asked; Gale is always the one driving, because the
+ * live view on stage belongs to Gale.
  */
 export async function researchClaim(input: { query: string; claim?: string; claimId?: string; requestedBy: AgentId }, ledger: Ledger, env: SwarmEnv): Promise<Evidence> {
   const { runtime } = ledger
+  const claim = input.claim ?? input.query
   const sources = runtime.search ? await runtime.search(input.query, 'gale', 5) : []
   const browser = runtime.browser?.('gale')
   let capture: Awaited<ReturnType<NonNullable<typeof browser>['capture']>> | null = null
+  let interaction: PageInteraction | undefined
+
   if (browser && sources[0]) {
     try {
       await browser.open()
       capture = await browser.capture(sources[0].url)
     } catch { capture = null }
-  }
-  if (!sources.length && !capture) return unprovenEvidence({ query: input.query, claimId: input.claimId, requestedBy: input.requestedBy, rationale: 'No live source could be reached.' })
 
-  const judged = await structured<{ status: EvidenceStatus; rationale: string; quote: string }>(env, {
-    instructions: 'You are an evidence clerk. Given a claim, search results, and the text of the top source, decide: verified (the source clearly supports the claim), contested (credible sources disagree or the source partly contradicts it), or unproven (nothing here settles it). Never assume; only use the supplied text. "quote" is a short verbatim excerpt from the source text (max 200 chars) or empty. "rationale" is one sentence.',
-    input: `Claim: ${input.claim ?? input.query}\nQuery: ${input.query}\n\nSearch results:\n${sources.map((hit, index) => `${index + 1}. ${hit.title} — ${hit.url}\n   ${hit.snippet}`).join('\n')}\n\nTop source (${capture?.finalUrl ?? 'not opened'}):\n${capture?.excerpt.slice(0, 2400) ?? '(no page text)'}`,
-    schema: { name: 'evidence_judgement', schema: { type: 'object', properties: { status: { type: 'string', enum: ['verified', 'contested', 'unproven'] }, rationale: { type: 'string' }, quote: { type: 'string' } }, required: ['status', 'rationale', 'quote'], additionalProperties: false } },
-  })
+    // `mode` is only meaningful after open() resolves; reading it earlier always
+    // says 'closed' and this pass would silently never run.
+    if (capture && browser.mode === 'stagehand' && ledger.claimDeepRead()) {
+      const instruction = `Dismiss any cookie banner, modal, or popup, then scroll to the part of the page about: ${claim}`
+      const acted = await browser.act(instruction, ACT_BUDGET_MS)
+      const read = await browser.extract(`Whether this page supports or contradicts: ${claim}`, EXTRACT_BUDGET_MS)
+      if (acted.ok || read) interaction = { instruction, acted: acted.message, extracted: read?.answer, quotes: read?.quotes }
+    }
+  }
+
+  if (!sources.length && !capture) {
+    return unprovenEvidence({ query: input.query, claimId: input.claimId, requestedBy: input.requestedBy, rationale: 'No live source could be reached.' })
+  }
+
+  const judged = await judgeEvidence(env, { claim, query: input.query, sources, pageText: capture?.excerpt ?? '', pageUrl: capture?.finalUrl, extraction: interaction?.extracted })
 
   return {
-    status: judged?.status ?? (capture ? 'contested' : 'unproven'),
+    // A page that was opened but not adjudicated is unproven, never contested:
+    // "contested" asserts that credible sources disagree, which nobody observed.
+    status: judged?.status ?? 'unproven',
+    judged: Boolean(judged),
     query: input.query, claimId: input.claimId, requestedBy: input.requestedBy,
     sourceUrl: capture?.finalUrl ?? sources[0]?.url, title: capture?.title ?? sources[0]?.title,
     excerpt: judged?.quote || capture?.excerpt.slice(0, 280) || sources[0]?.snippet,
     rationale: judged?.rationale ?? (capture ? 'A source was opened but no judgement was available.' : 'Search results only; the source was not opened.'),
     sources: sources.slice(0, 3), screenshotDataUrl: capture?.screenshotDataUrl,
+    via: capture ? 'live' : 'search',
+    interaction,
     capturedAt: capture?.capturedAt ?? new Date().toISOString(), screenshotCaptured: Boolean(capture?.screenshotDataUrl),
   }
 }
@@ -148,15 +229,33 @@ export function toolsFor(agent: JurorId, ledger: Ledger, env: SwarmEnv): Tool[] 
       spec: {
         name: 'act_on_page',
         description: 'Take a natural-language action in the live browser on the page you already opened, then read the result. Use when the answer is behind a click: dismiss a cookie banner, open the pricing tab, expand reviews, scroll to the comparison table. Example: "close the popup and click Pricing".',
-        parameters: { type: 'object', properties: { instruction: { type: 'string' }, thenExtract: { type: 'string', description: 'What to read after acting, e.g. "the monthly price and what it includes". Empty string to skip.' } }, required: ['instruction', 'thenExtract'], additionalProperties: false },
+        parameters: { type: 'object', properties: { instruction: { type: 'string' }, thenExtract: { type: 'string', description: 'What to read after acting, e.g. "the monthly price and what it includes". Empty string to skip.' }, claimId: { type: 'string', description: 'Ledger claim id this settles, or empty string.' } }, required: ['instruction', 'thenExtract', 'claimId'], additionalProperties: false },
       },
       run: (args) => timed(ledger, agent, 'act_on_page', args, async () => {
         const browser = runtime.browser?.('gale')
         if (!browser || !browser.active) return { error: 'Open a page with research_claim first.' }
-        const acted = await browser.act(str(args.instruction))
+        if (browser.mode !== 'stagehand') return { error: 'This session cannot act on pages.' }
+        const instruction = str(args.instruction)
+        const acted = await browser.act(instruction, ACT_BUDGET_MS)
         const question = str(args.thenExtract).trim()
-        const extracted = question ? await browser.extract(question) : null
-        return { acted, extracted }
+        const extracted = question ? await browser.extract(question, EXTRACT_BUDGET_MS) : null
+
+        // Whatever the click uncovered used to vanish into the tool result.
+        // Record it, so a fact behind a cookie wall can still reach the verdict.
+        const claimId = str(args.claimId) || undefined
+        const claim = claimId ? ledger.claims.find((item) => item.id === claimId)?.claim : undefined
+        const judged = claim && extracted?.answer
+          ? await judgeEvidence(env, { claim, query: question || instruction, sources: [], pageText: extracted.answer, extraction: extracted.answer })
+          : null
+        const evidence = ledger.addEvidence({
+          status: judged?.status ?? 'unproven', judged: Boolean(judged), via: 'live', claimId,
+          query: question || instruction,
+          excerpt: judged?.quote || extracted?.answer?.slice(0, 280) || acted.message.slice(0, 280),
+          rationale: judged?.rationale ?? `Gale acted on the open page ("${instruction}") and read what it said.`,
+          interaction: { instruction, acted: acted.message, extracted: extracted?.answer, quotes: extracted?.quotes },
+          capturedAt: new Date().toISOString(), screenshotCaptured: false, requestedBy: 'gale',
+        })
+        return { acted, extracted, evidenceStatus: evidence.status }
       }),
     }
     return [readLedger, research, act, searchWeb, messageJuror]
@@ -179,7 +278,7 @@ export function toolsFor(agent: JurorId, ledger: Ledger, env: SwarmEnv): Tool[] 
   const browseSite: Tool = {
     spec: {
       name: 'browse_site',
-      description: 'Open one URL in the shared live cloud browser and read what it says. Use after search_web when a snippet is not enough: a competitor landing page, a GitHub README, a forum thread of user complaints.',
+      description: 'Read one URL and get its text. Use after search_web when a snippet is not enough: a competitor landing page, a GitHub README, a forum thread of user complaints.',
       parameters: { type: 'object', properties: { url: { type: 'string' }, lookingFor: { type: 'string' } }, required: ['url', 'lookingFor'], additionalProperties: false },
     },
     run: (args) => timed(ledger, agent, 'browse_site', args, async () => {
@@ -187,10 +286,22 @@ export function toolsFor(agent: JurorId, ledger: Ledger, env: SwarmEnv): Tool[] 
       if (!/^https?:\/\//.test(url)) return { error: 'A full http(s) URL is required.' }
       const browser = runtime.browser?.(agent)
       if (!browser) return { error: 'Browserbase is not configured.' }
-      await browser.open()
-      const capture = await browser.capture(url, { screenshot: true })
-      ledger.addEvidence({ status: 'contested', query: str(args.lookingFor), sourceUrl: capture.finalUrl, title: capture.title, excerpt: capture.excerpt.slice(0, 280), rationale: `${agent} read this page while looking for: ${str(args.lookingFor)}`, screenshotDataUrl: capture.screenshotDataUrl, capturedAt: capture.capturedAt, screenshotCaptured: Boolean(capture.screenshotDataUrl), requestedBy: agent })
-      return { url: capture.finalUrl, title: capture.title, text: capture.excerpt.slice(0, 1600) }
+      const page = await readPage(runtime, agent, url)
+      if (!page) return { error: 'That page could not be read.' }
+      const lookingFor = str(args.lookingFor)
+      // Reading a page is an observation, not a judgement, so it stays unproven.
+      // Only the evidence clerk may mark something verified or contested.
+      ledger.addEvidence({
+        status: 'unproven', judged: false, via: page.via,
+        query: lookingFor, sourceUrl: page.finalUrl, title: page.title,
+        excerpt: page.excerpt.slice(0, 280),
+        rationale: `${agent} read this page while looking for: ${lookingFor}`,
+        screenshotDataUrl: page.screenshotDataUrl, capturedAt: page.capturedAt,
+        screenshotCaptured: Boolean(page.screenshotDataUrl), requestedBy: agent,
+      })
+      // The screenshot stays out of the return value: it would land in the run
+      // tree and every subscriber as base64.
+      return { url: page.finalUrl, title: page.title, via: page.via, text: page.excerpt.slice(0, 1600) }
     }),
   }
 

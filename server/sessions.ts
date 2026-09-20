@@ -1,5 +1,5 @@
 import type { ServerResponse } from 'node:http'
-import { LiveBrowser, searchWeb } from './browserbase.ts'
+import { LiveBrowser, fetchPage, readableFromMarkdown, searchWeb } from './browserbase.ts'
 import type { BrowserEvent } from './browserbase.ts'
 import type { Env } from './env.ts'
 import type { AgentId, DeliberationResult, JurorId, SwarmEvent, SwarmRuntime } from './swarm/types.ts'
@@ -89,9 +89,16 @@ export class SessionStore {
     return {
       emit: forward,
       search: env.BROWSERBASE_API_KEY ? (query: string, agent: AgentId, numResults?: number) => searchWeb(query, { env, emit: forward, agent }, numResults) : undefined,
+      fetchPage: env.BROWSERBASE_API_KEY ? async (url: string, agent: AgentId) => {
+        const raw = await fetchPage(url, { env, emit: forward, agent }, { actor: agent })
+        if (!raw || raw.statusCode >= 400) return null
+        return readableFromMarkdown(url, raw.content)
+      } : undefined,
       browser: env.BROWSERBASE_API_KEY && env.BROWSERBASE_PROJECT_ID ? (agent: AgentId) => {
+        // One session for the whole jury, but each juror gets its own handle so
+        // stage events name the agent actually driving.
         if (!session.browser) session.browser = new LiveBrowser({ env, emit: forward, agent })
-        return session.browser
+        return session.browser.viewFor(agent)
       } : undefined,
     }
   }
