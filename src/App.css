@@ -340,6 +340,32 @@
   margin: 19px auto 0;
   text-decoration: underline;
 }
+.back-link {
+  background: transparent;
+  border: 0;
+  color: #56718a;
+  cursor: pointer;
+  display: block;
+  font: 600 11px "DM Mono";
+  margin: 13px auto 0;
+  text-decoration: underline;
+}
+.form-notice {
+  background: #fff8e4e8;
+  border: 1px solid #c78236;
+  border-radius: 10px;
+  color: #785221;
+  font: 600 12px/1.4 "DM Sans";
+  margin: 14px auto 0;
+  max-width: 560px;
+  padding: 9px 12px;
+}
+.pitch-guidance {
+  color: #54718b;
+  display: block;
+  font: 600 11px/1.4 "DM Sans";
+  margin: -9px 0 16px;
+}
 .subdued .sky-juror {
   filter: grayscale(0.2) opacity(0.72);
   transform: scale(0.82);

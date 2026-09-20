@@ -88,5 +88,12 @@ set `PORT` and `VITE_JURY_API_URL` together if another checkout is running.
   must still run.
 - Every new browser or model call needs a timeout. One hung request blocks the
   queue the jurors share and freezes the panel in front of an audience.
+- Treat input validation as part of the product: never deliberate on an empty
+  turn, greeting, mic check, or obvious side conversation. Return a clear,
+  actionable prompt and preserve the builder's place instead of fabricating a
+  verdict.
+- Every screen needs an obvious recoverable exit. Setup screens have a back
+  route, **Esc** exits an in-progress session safely, and provider failures
+  must offer a usable fallback rather than a dead-end overlay.
 - Build, lint, typecheck, and run `npm run demo:jury` before each logical commit.
 - Do not deploy or create cloud resources unless asked.

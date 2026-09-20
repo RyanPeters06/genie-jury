@@ -14,7 +14,7 @@ import { JuryTrace, traceFromFinding, traceFromNode } from './components/JuryTra
 import type { TraceItem } from './components/JuryTrace'
 import {
   createRemoteSession, finishRemoteSession, getConnectionState, getServiceHealth,
-  requestDeliberation, requestInterjection, requestJurorAudio, requestReply, subscribeToStage,
+  PitchValidationError, requestDeliberation, requestInterjection, requestJurorAudio, requestReply, subscribeToStage,
 } from './lib/jury-api'
 import type { ConnectionState, Deliberation, Evidence, Finding, JurorId, JurorTurn, RunNode, StageEvent } from './lib/jury-api'
 import { openMicrophone } from './lib/realtime'
@@ -39,8 +39,6 @@ const JUROR_BY_ID = Object.fromEntries(JURORS.map((juror) => [juror.id, juror]))
 const AGENT_LABEL: Record<string, string> = { bailiff: 'Bailiff', ally: 'The Ally', builder: 'You', system: 'Jury' }
 const agentName = (agent?: string | null) => (agent && agent in JUROR_BY_ID ? JUROR_BY_ID[agent as JurorId].name : AGENT_LABEL[agent ?? ''] ?? agent ?? 'Jury')
 const agentAccent = (agent: string) => (agent in JUROR_BY_ID ? JUROR_BY_ID[agent as JurorId].accent : '#6d8aa6')
-
-const DEFAULT_PITCH = 'Genie Jury is a live pitch arena for hackathon builders. Four AI jurors interrupt your pitch, research your claims in a real browser, argue with each other, and hand you the smallest next thing worth building.'
 
 /** A transparent local rubric keeps the verdict useful even if a provider falls back. */
 function scorePitch(pitch: string, evidence: Evidence[], findings: Finding[]): Scorecard[] {
@@ -75,7 +73,7 @@ const PITCH_SILENCE_MS = 3200
 export default function App() {
   const [stage, setStage] = useState<Stage>('intro')
   const [mode, setMode] = useState<'Hackathon' | 'Startup'>('Hackathon')
-  const [pitch, setPitch] = useState(DEFAULT_PITCH)
+  const [pitch, setPitch] = useState('')
   const [caption, setCaption] = useState('')
   const [partial, setPartial] = useState('')
   const [speakingJuror, setSpeakingJuror] = useState<JurorId | null>(null)
@@ -242,6 +240,9 @@ export default function App() {
       case 'browser.error':
         setBrowser((current) => ({ ...current, status: current.screenshots.length ? current.status : 'error' }))
         break
+      case 'pitch.invalid':
+        setNotice(String(data.message ?? 'The jury needs a real pitch before it can deliberate.'))
+        break
       case 'ledger.evidence':
         setEvidence((current) => [...current, data.evidence as Evidence])
         break
@@ -369,14 +370,27 @@ export default function App() {
       // Turns stream in over the event feed, so the panel usually starts talking
       // while this request is still finishing the verdict and the votes.
       const result = await requestDeliberation(sessionId, pitchRef.current || pitch)
+      // Ending a call is final. A provider response that arrives afterwards
+      // must not resurrect the verdict screen or start juror audio again.
+      if (sessionRef.current !== sessionId || stageRef.current === 'intro') return
       turnsDoneRef.current = true
       setDeliberation(result)
       setEvidence(result.ledger.evidence)
       for (const node of result.runTree) pushTrace(traceFromNode(node))
       result.turns.forEach((turn, index) => { turnsRef.current[index] = turnsRef.current[index] ?? turn })
       if (stageRef.current === 'deliberating') { setStage('panel'); void runPanelRef.current(0) }
-    } catch {
+    } catch (error) {
+      if (sessionRef.current !== sessionId || stageRef.current === 'intro') return
       turnsDoneRef.current = true
+      if (error instanceof PitchValidationError) {
+        setNotice(error.message)
+        setCue('The jury needs a pitch')
+        setCaption('')
+        setSpeakingJuror(null)
+        setFocusJuror(null)
+        setStage(micRef.current ? 'pitching' : 'text')
+        return
+      }
       setConnection('service-unavailable')
       setNotice('The jury service is unreachable, so the jurors are speaking from their fallback notes.')
       if (!turnsRef.current.length) turnsRef.current = JURORS.map((juror) => ({ juror: juror.id, line: juror.line, cue: juror.cue, basedOn: { findingIds: [], evidenceIds: [], messagesFrom: [] } }))
@@ -445,14 +459,22 @@ export default function App() {
     if (busyRef.current) return
     busyRef.current = true
     try {
-      const session = await createRemoteSession({ mode, pitch: pitch.trim() || DEFAULT_PITCH })
+      const session = await createRemoteSession({ mode, pitch: '' })
       if (session) {
         sessionRef.current = session.id
         setConnection('connected')
         unsubscribeRef.current = subscribeToStage(session.id, onStageEvent)
       }
-    } catch { setConnection('service-unavailable') }
+    } catch {
+      setConnection('service-unavailable')
+      setNotice('The jury service could not start. Check the local API, then try again.')
+    }
     busyRef.current = false
+
+    if (!sessionRef.current) {
+      setNotice('The jury service is unavailable. Check the local API, then try again.')
+      return
+    }
 
     pitchRef.current = ''
     setPitch('')
@@ -484,21 +506,35 @@ export default function App() {
       })
       micRef.current = mic
     } else setStage('text')
-  }, [handleSpeechStart, handleUtterance, mode, onStageEvent, pitch, schedulePitchConclusion])
+  }, [handleSpeechStart, handleUtterance, mode, onStageEvent, schedulePitchConclusion])
 
   const submitTypedPitch = useCallback(async (event: FormEvent) => {
     event.preventDefault()
+    const typedPitch = pitch.trim()
+    if (!typedPitch) {
+      setNotice('Write a pitch first: what are you building, who is it for, and why does it matter?')
+      return
+    }
     if (!sessionRef.current) {
       try {
-        const session = await createRemoteSession({ mode, pitch: pitch.trim() || DEFAULT_PITCH })
+        const session = await createRemoteSession({ mode, pitch: typedPitch })
         if (session) { sessionRef.current = session.id; setConnection('connected'); unsubscribeRef.current = subscribeToStage(session.id, onStageEvent) }
-      } catch { setConnection('service-unavailable') }
+      } catch {
+        setConnection('service-unavailable')
+        setNotice('The jury service is unavailable. Your pitch is still here—check the API and try again.')
+        return
+      }
     }
-    pitchRef.current = pitch.trim() || DEFAULT_PITCH
+    if (!sessionRef.current) {
+      setNotice('The jury service is unavailable. Your pitch is still here—check the API and try again.')
+      return
+    }
+    pitchRef.current = typedPitch
     void beginDeliberationRef.current()
   }, [mode, onStageEvent, pitch])
 
   const endSession = useCallback(() => {
+    const hasVerdict = Boolean(deliberation)
     stopAudio()
     builderSpeakingRef.current = false
     jurorSpeakingRef.current = false
@@ -515,8 +551,18 @@ export default function App() {
     if (sessionRef.current) void finishRemoteSession(sessionRef.current)
     setSpeakingJuror(null)
     setListening(false)
-    setStage('verdict')
-  }, [stopAudio])
+    if (hasVerdict) {
+      setStage('verdict')
+      return
+    }
+    sessionRef.current = null
+    pitchRef.current = ''
+    answerRef.current = ''
+    setPitch('')
+    setCaption('')
+    setNotice(null)
+    setStage('intro')
+  }, [deliberation, stopAudio])
 
   useEffect(() => () => {
     micRef.current?.stop()
@@ -536,6 +582,7 @@ export default function App() {
   }, [beginSession, endSession, stage, stopAudio])
 
   const restart = () => {
+    stopAudio()
     micRef.current?.stop()
     micRef.current = null
     unsubscribeRef.current?.()
@@ -555,7 +602,7 @@ export default function App() {
     setEvidence([])
     setTrace([])
     setBrowser(idleBrowserActivity)
-    setPitch(DEFAULT_PITCH)
+    setPitch('')
     setCaption('')
     setNotice(null)
     setStage('intro')
@@ -592,6 +639,8 @@ export default function App() {
         <div className="mode-toggle">{(['Hackathon', 'Startup'] as const).map((item) => <button type="button" key={item} className={mode === item ? 'selected' : ''} onClick={() => setMode(item)}>{item} mode</button>)}</div>
         <button className="sun-button" onClick={() => void beginSession()}>TURN ON MIC <i>●</i></button>
         <button className="text-link" onClick={() => setStage('text')}>I would rather type my pitch</button>
+        {notice && <p className="form-notice" role="status">{notice}</p>}
+        <button className="back-link" onClick={() => { setNotice(null); setStage('intro') }}>← Back to welcome</button>
         <small>Space starts · M mutes the jury · Esc ends the session</small>
       </div>
       <JurySky subdued />
@@ -603,8 +652,11 @@ export default function App() {
         <p>TYPE YOUR CASE</p>
         <h2>What idea are you asking<br />the jury to believe in?</h2>
         <div className="mode-toggle">{(['Hackathon', 'Startup'] as const).map((item) => <button type="button" key={item} className={mode === item ? 'selected' : ''} onClick={() => setMode(item)}>{item} mode</button>)}</div>
-        <textarea value={pitch} onChange={(event) => setPitch(event.target.value)} />
+        <textarea value={pitch} onChange={(event) => setPitch(event.target.value)} placeholder="I am building … for … because …" aria-describedby="pitch-guidance" />
+        <small id="pitch-guidance" className="pitch-guidance">A sentence or two is enough. The jury needs the product, the person it helps, and the problem.</small>
+        {notice && <p className="form-notice" role="status">{notice}</p>}
         <button className="sun-button" type="submit">SUMMON THE JURY <i>→</i></button>
+        <button className="back-link" type="button" onClick={() => { setNotice(null); setStage('ready') }}>← Back to voice pitch</button>
       </form>
     </section>}
 

@@ -16,6 +16,17 @@ export type Deliberation = { runId: string; mode: 'live' | 'deterministic'; ledg
 export type Interjection = { interrupt: boolean; juror: JurorId; line: string; trigger: string }
 export type StageEvent = { id: number; type: string; at: string; data: Record<string, unknown> }
 
+/** A recoverable input problem, not a provider failure. */
+export class PitchValidationError extends Error {
+  readonly code: string
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'PitchValidationError'
+    this.code = code
+  }
+}
+
 const apiBase = import.meta.env.VITE_JURY_API_URL?.replace(/\/$/, '')
 
 async function request(path: string, init?: RequestInit) {
@@ -63,6 +74,10 @@ export async function requestInterjection(sessionId: string, input: { pitchSoFar
 
 export async function requestDeliberation(sessionId: string, transcript: string): Promise<Deliberation> {
   const response = await post(`/sessions/${sessionId}/deliberate`, { transcript })
+  if (response.status === 422) {
+    const body = await response.json().catch(() => ({})) as { code?: string; message?: string }
+    throw new PitchValidationError(body.code ?? 'invalid-pitch', body.message ?? 'The jury needs a fuller pitch before it can deliberate.')
+  }
   if (!response.ok) throw new Error('The jury could not finish deliberating.')
   return response.json() as Promise<Deliberation>
 }
@@ -90,7 +105,7 @@ export function subscribeToStage(sessionId: string, onEvent: (event: StageEvent)
   const handler = (event: MessageEvent) => {
     try { onEvent(JSON.parse(event.data) as StageEvent) } catch { /* ignore malformed frames */ }
   }
-  const types = ['session.stage', 'pitch.updated', 'juror.interjects', 'deliberation.ready', 'deliberation.failed', 'juror.replied', 'juror.turn', 'juror.audio', 'ledger.node', 'ledger.finding', 'ledger.evidence', 'ledger.message', 'browser.session', 'browser.search', 'browser.navigate', 'browser.screenshot', 'browser.act', 'browser.extract', 'browser.closed', 'browser.error']
+  const types = ['session.stage', 'pitch.updated', 'pitch.invalid', 'juror.interjects', 'deliberation.ready', 'deliberation.failed', 'juror.replied', 'juror.turn', 'juror.audio', 'ledger.node', 'ledger.finding', 'ledger.evidence', 'ledger.message', 'browser.session', 'browser.search', 'browser.navigate', 'browser.screenshot', 'browser.act', 'browser.extract', 'browser.closed', 'browser.error']
   for (const type of types) source.addEventListener(type, handler as EventListener)
   return () => source.close()
 }
