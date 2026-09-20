@@ -2,7 +2,7 @@ import http from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { browserbaseConfigured } from './browserbase.ts'
 import { synthesize } from './elevenlabs.ts'
-import { loadEnv, serviceHealth } from './env.ts'
+import { loadEnv, serviceHealth, voiceFingerprint } from './env.ts'
 import { createRealtimeSecret, detectInterjection } from './openai.ts'
 import { SessionStore } from './sessions.ts'
 import type { Session } from './sessions.ts'
@@ -170,6 +170,7 @@ http.createServer((request, response) => {
 }).listen(env.PORT, '127.0.0.1', () => {
   const services = serviceHealth(env)
   console.log(`Genie Jury API on http://127.0.0.1:${env.PORT}  openai=${services.openai} elevenlabs=${services.elevenlabs} (${services.elevenlabsModel}) browserbase=${browserbaseConfigured(env) ? 'configured' : services.browserbase}`)
+  console.log(`  voices ${voiceFingerprint(env)}`)
 })
 
 export type { Session }

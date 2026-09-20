@@ -22,18 +22,24 @@ interface Delivery {
   stability: 0 | 0.5 | 1
   similarity_boost: number
   style: number
-  speed: number
+  /** v3 has no numeric rate control, so this is only sent to the Flash fallback. */
+  fallbackSpeed: number
 }
 
+/**
+ * Tuned against the cast in docs/VOICES.md. Keep the two in step: these numbers
+ * were chosen for these specific voices, and they do not transfer if a voice is
+ * recast.
+ */
 const DELIVERY: Record<JurorId, Delivery> = {
-  // Warm, fast, hands-on. Natural stability keeps him steady while still animated.
-  ember: { stability: 0.5, similarity_boost: 0.8, style: 0.3, speed: 1.04 },
-  // Calm and precise. Slower, flatter, and the most stable of the four.
-  gale: { stability: 0.5, similarity_boost: 0.85, style: 0.1, speed: 0.96 },
-  // Empathetic and conversational, with a little more colour than Gale.
-  tide: { stability: 0.5, similarity_boost: 0.8, style: 0.3, speed: 1 },
-  // Theatrical. Creative stability lets v3 actually perform the comic timing.
-  volt: { stability: 0, similarity_boost: 0.75, style: 0.6, speed: 1.06 },
+  // Liam. Warm, fast, hands-on. Natural stability keeps him steady but animated.
+  ember: { stability: 0.5, similarity_boost: 0.78, style: 0.18, fallbackSpeed: 1.04 },
+  // Alice. Calm and precise, so the least style of the four and the slowest fallback.
+  gale: { stability: 0.5, similarity_boost: 0.82, style: 0.06, fallbackSpeed: 0.92 },
+  // Hope. Empathetic and conversational, a little more colour than Gale.
+  tide: { stability: 0.5, similarity_boost: 0.75, style: 0.14, fallbackSpeed: 0.96 },
+  // Harry. Theatrical: creative stability is what lets v3 perform the comic timing.
+  volt: { stability: 0, similarity_boost: 0.72, style: 0.42, fallbackSpeed: 1.08 },
 }
 
 export function voiceFor(juror: JurorId, env: Env) {
@@ -52,8 +58,15 @@ function buildBody(request: SpeechRequest, model: string): Record<string, unknow
   return {
     text: v3 ? request.line : stripTags(request.line),
     model_id: model,
-    voice_settings: { stability: delivery.stability, similarity_boost: delivery.similarity_boost, style: delivery.style, speed: delivery.speed, use_speaker_boost: true },
-    // v3 rejects these outright; on v2 they carry prosody across the turn.
+    voice_settings: {
+      stability: delivery.stability,
+      similarity_boost: delivery.similarity_boost,
+      style: delivery.style,
+      use_speaker_boost: true,
+      // v3 has no numeric rate control and pacing comes from the tags instead.
+      ...(v3 ? {} : { speed: delivery.fallbackSpeed }),
+    },
+    // v3 rejects these outright; on the fallback they carry prosody across the turn.
     ...(v3 ? {} : { previous_text: request.previousText?.slice(-400), next_text: request.nextText?.slice(0, 200) }),
     apply_text_normalization: 'auto',
   }
@@ -69,12 +82,15 @@ export async function synthesize(request: SpeechRequest, env: Env): Promise<Resp
     body: JSON.stringify(buildBody(request, model)),
   })
 
+  // Flash is the right fallback for a live panel: far lower latency than
+  // Multilingual, and it still accepts previous_text for prosody continuity.
+  const FALLBACK_MODEL = 'eleven_flash_v2_5'
   let model = env.ELEVENLABS_MODEL
   let response = await attempt(model)
-  if (!response.ok && model !== 'eleven_multilingual_v2') {
+  if (!response.ok && model !== FALLBACK_MODEL) {
     const detail = await response.text().catch(() => '')
     console.warn(`[elevenlabs] ${model} failed (${response.status}) for ${request.juror}: ${detail.slice(0, 200)}`)
-    model = 'eleven_multilingual_v2'
+    model = FALLBACK_MODEL
     response = await attempt(model)
   }
   if (!response.ok) {

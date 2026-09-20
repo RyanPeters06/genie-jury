@@ -31,7 +31,11 @@ function parseDotenv(path: string): Record<string, string> {
 }
 
 export function loadEnv(): Env {
-  const merged = { ...parseDotenv('.env'), ...parseDotenv('.env.local'), ...parseDotenv('.dev.vars'), ...process.env } as Record<string, string | undefined>
+  // Order matters, lowest precedence first. `.dev.vars` is a leftover from the
+  // removed Cloudflare setup and must lose to `.env.local`: when both defined a
+  // voice id, the stale file silently won and every juror spoke in the wrong
+  // voice while the docs described the intended cast.
+  const merged = { ...parseDotenv('.dev.vars'), ...parseDotenv('.env'), ...parseDotenv('.env.local'), ...process.env } as Record<string, string | undefined>
   const clean = (value?: string) => (value && value.trim() ? value.trim() : undefined)
   return {
     PORT: Number(merged.PORT ?? 8790),
@@ -51,13 +55,28 @@ export function loadEnv(): Env {
   }
 }
 
+/** Every juror needs its own voice; checking only Ember hid three missing casts. */
+export function jurorVoices(env: Env) {
+  return { ember: env.ELEVENLABS_EMBER_VOICE_ID, gale: env.ELEVENLABS_GALE_VOICE_ID, tide: env.ELEVENLABS_TIDE_VOICE_ID, volt: env.ELEVENLABS_VOLT_VOICE_ID }
+}
+
+/**
+ * A voice id is not a secret, but it is not ours to print either. The last four
+ * characters are enough to tell at a glance which cast is actually loaded,
+ * which is the check that would have caught the stale-file override.
+ */
+export function voiceFingerprint(env: Env) {
+  return Object.entries(jurorVoices(env)).map(([juror, id]) => `${juror}:${id ? `…${id.slice(-4)}` : 'unset'}`).join(' ')
+}
+
 /** Safe, value-free view of what is configured, for /health/services and the on-stage badges. */
 export function serviceHealth(env: Env) {
+  const missingVoices = Object.entries(jurorVoices(env)).filter(([, id]) => !id).map(([juror]) => juror)
   return {
     openai: env.OPENAI_API_KEY ? 'configured' : 'missing',
     realtime: env.OPENAI_API_KEY ? 'configured' : 'missing',
     browserbase: !env.BROWSERBASE_API_KEY ? 'missing-key' : !env.BROWSERBASE_PROJECT_ID ? 'missing-project' : 'configured',
-    elevenlabs: !env.ELEVENLABS_API_KEY ? 'missing-key' : !env.ELEVENLABS_EMBER_VOICE_ID ? 'missing-voices' : 'configured',
+    elevenlabs: !env.ELEVENLABS_API_KEY ? 'missing-key' : missingVoices.length ? `missing-voices:${missingVoices.join(',')}` : 'configured',
     elevenlabsModel: env.ELEVENLABS_MODEL,
     model: env.OPENAI_MODEL,
   }
