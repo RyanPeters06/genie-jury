@@ -6,7 +6,7 @@ function browserStub() {
   const open = vi.fn().mockResolvedValue(undefined)
   const capture = vi.fn().mockResolvedValue({
     url: 'https://example.test/page', finalUrl: 'https://example.test/page',
-    title: 'Live page', excerpt: 'A live browser capture with enough text to stand in for a rendered page.',
+    title: 'Live page', excerpt: 'A live browser capture with enough readable text to stand in for a rendered page. '.repeat(3),
     capturedAt: '2026-01-01T00:00:00.000Z',
   })
   return { open, capture, browser: { active: false, liveViewUrl: null, mode: 'playwright', open, capture, act: vi.fn(), extract: vi.fn(), close: vi.fn() } as unknown as WebBrowser }
