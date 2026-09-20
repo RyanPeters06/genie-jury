@@ -56,6 +56,16 @@ turn is ready rather than when the whole run finishes.
 Events are numbered and replayed on reconnect, so a dropped connection mid-demo
 catches up instead of losing the session.
 
+### Pitch validity gate
+
+Creating a voice session is allowed with an empty transcript, but deliberation
+is not. Before agents, browser calls, or scoring begin, `POST /deliberate`
+rejects empty input, a greeting/microphone check, and fragments that do not yet
+describe an idea. It returns `422 invalid-pitch` with a short next-step message
+and emits `pitch.invalid`; the client returns to pitching or the typed form and
+keeps the session recoverable. A valid short idea is intentionally accepted —
+this gate prevents false confidence, not unusual founders.
+
 ## Browserbase
 
 Three capabilities, chosen per agent:
@@ -101,6 +111,12 @@ The stage must never hang and must never claim evidence it does not have.
 - With no keys at all, the full flow still runs end to end on scripted findings
   and the browser's own speech synthesis.
 - A failed juror audio request falls back to browser speech rather than silence.
+- Invalid input is a recoverable state, not an outage: no agent run, score, or
+  invented verdict is produced. The UI explains what is missing and gives the
+  builder a Back or Exit route.
+- Ending before a verdict closes the microphone, cancels audio, releases the
+  remote session, and returns to the welcome screen; only a completed session
+  goes to the verdict screen.
 
 ## Security boundaries
 

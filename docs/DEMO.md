@@ -72,6 +72,8 @@ story in one screen.
 | The browser dock stays empty | Gale only opens a browser for a claim worth checking. Use the pitch above. |
 | Deliberation feels slow | It is about 45 seconds. Narrate the Browserbase dock while it works; that is the show. |
 | A provider is down | The jury still runs on fallbacks. Say which provider is out rather than pretending. |
+| You only said a greeting or mic check | The jury asks for the product, person, and problem instead of pretending it evaluated an idea. Continue speaking or use the typed fallback. |
+| You need to leave a screen | Use the visible Back link before pitching; **Esc** or **End session** safely returns an unfinished call to welcome. |
 | Everything is broken | `npm run demo:jury` prints a full deliberation in the terminal. |
 
 ## Keys

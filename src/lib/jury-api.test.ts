@@ -27,4 +27,9 @@ describe('Jury API client', () => {
     const api = await loadApi(vi.fn().mockResolvedValue(new Response('unavailable', { status: 503 })))
     await expect(api.requestJurorAudio('session', 'ember', 'line')).rejects.toThrow('Juror audio is unavailable.')
   })
+
+  it('keeps an invalid pitch distinct from a provider outage', async () => {
+    const api = await loadApi(vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 'side-conversation', message: 'Please pitch an idea.' }), { status: 422 })))
+    await expect(api.requestDeliberation('session', 'Can you hear me?')).rejects.toMatchObject({ name: 'PitchValidationError', code: 'side-conversation', message: 'Please pitch an idea.' })
+  })
 })

@@ -16,6 +16,11 @@ Most builders ask a chatbot whether their idea is good and get a flattering answ
 
 Evidence is never invented. A claim is **verified**, **contested**, or **unproven**, and the source is on screen with a screenshot.
 
+The jury also refuses to manufacture confidence from a microphone check or a
+side conversation: a real pitch must name enough of an idea to assess. Invalid
+input gets a clear recovery prompt, and every setup or live-call screen has a
+safe way back out.
+
 ## Quick start
 
 ```bash

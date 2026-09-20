@@ -4,6 +4,7 @@ import { browserbaseConfigured } from './browserbase.ts'
 import { synthesize } from './elevenlabs.ts'
 import { loadEnv, serviceHealth } from './env.ts'
 import { createRealtimeSecret, detectInterjection } from './openai.ts'
+import { validatePitch } from './pitch-validation.ts'
 import { SessionStore } from './sessions.ts'
 import type { Session } from './sessions.ts'
 import { JURORS } from './swarm/agents.ts'
@@ -73,8 +74,10 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
 
   if (request.method === 'POST' && url.pathname === '/sessions') {
     const body = await readJson<{ mode?: 'Hackathon' | 'Startup'; pitch?: string }>(request)
-    if (!body?.pitch?.trim()) return fail('A pitch is required.')
-    const session = store.create({ mode: body.mode, pitch: body.pitch })
+    if (!body) return fail('The session request was not valid.')
+    // Voice sessions deliberately begin blank. The pitch is assessed only once
+    // the builder has actually said enough to be judged.
+    const session = store.create({ mode: body.mode, pitch: body.pitch?.trim() ?? '' })
     return reply(201, store.view(session))
   }
 
@@ -115,7 +118,13 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
 
   if (request.method === 'POST' && tail === 'deliberate') {
     const body = await readJson<{ transcript?: string }>(request)
-    if (body?.transcript?.trim()) session.pitch = body.transcript.trim()
+    const validation = validatePitch(body?.transcript ?? session.pitch)
+    if (!validation.valid) {
+      store.touch(session, 'pitching')
+      store.emit(session, 'pitch.invalid', { code: validation.code, message: validation.message })
+      return reply(422, { error: 'invalid-pitch', code: validation.code, message: validation.message })
+    }
+    session.pitch = validation.pitch
     store.touch(session, 'deliberating')
     try {
       const result = await deliberate(session.pitch, session.mode, env, store.runtime(session))
