@@ -97,6 +97,9 @@ export default function App() {
   const micRef = useRef<Mic | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const audioUrlRef = useRef<string | null>(null)
+  const audioCompletionRef = useRef<(() => void) | null>(null)
+  const audioGenerationRef = useRef(0)
+  const jurorSpeakingRef = useRef(false)
   const audioStartedAt = useRef(0)
   const unsubscribeRef = useRef<(() => void) | null>(null)
   const stageRef = useRef<Stage>('intro')
@@ -108,9 +111,14 @@ export default function App() {
   const answerTimer = useRef<number | null>(null)
   const advanceTimer = useRef<number | null>(null)
   const pitchSilenceTimer = useRef<number | null>(null)
+  const builderSpeakingRef = useRef(false)
+  const interjectionPendingRef = useRef(false)
+  const deliberationRequestRef = useRef(false)
   const interjectAt = useRef(0)
   const busyRef = useRef(false)
   const turnsDoneRef = useRef(false)
+  const beginDeliberationRef = useRef<() => Promise<void>>(async () => undefined)
+  const submitAnswerRef = useRef<() => Promise<void>>(async () => undefined)
 
   const caseName = useMemo(() => pitch.match(/^\s*([A-Z][\w\s'-]{2,35}?)(?:\s+is|\s+helps|\s+lets|:)/)?.[1]?.trim() || 'Your idea', [pitch])
 
@@ -130,6 +138,12 @@ export default function App() {
   // ---- audio ------------------------------------------------------------
 
   const stopAudio = useCallback(() => {
+    // Resolve the current playback promise before pausing. Without this, a
+    // barge-in can leave runPanel awaiting an `ended` event that never fires.
+    audioGenerationRef.current += 1
+    const finish = audioCompletionRef.current
+    audioCompletionRef.current = null
+    finish?.()
     audioRef.current?.pause()
     audioRef.current = null
     if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
@@ -141,33 +155,61 @@ export default function App() {
     if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
     pitchSilenceTimer.current = null
     stopAudio()
+    const playbackGeneration = audioGenerationRef.current
+    jurorSpeakingRef.current = true
     setSpeakingJuror(juror)
     audioStartedAt.current = Date.now()
     const clean = line.replace(/\[[^\]]{1,24}\]/g, '').replace(/\s{2,}/g, ' ').trim()
-    if (muted) return new Promise<void>((resolve) => window.setTimeout(resolve, Math.min(9000, 400 + clean.length * 45)))
-    const sessionId = sessionRef.current
-    if (sessionId) {
-      try {
-        const blob = await requestJurorAudio(sessionId, juror, line)
-        const url = URL.createObjectURL(blob)
-        const audio = new Audio(url)
-        audioUrlRef.current = url
-        audioRef.current = audio
-        audioStartedAt.current = Date.now()
-        await audio.play()
-        await new Promise<void>((resolve) => { audio.onended = () => resolve(); audio.onerror = () => resolve() })
-        return
-      } catch { /* fall through to the browser voice */ }
-    }
-    if (!('speechSynthesis' in window)) return
-    await new Promise<void>((resolve) => {
-      const utterance = new SpeechSynthesisUtterance(clean)
-      utterance.rate = .98
-      utterance.pitch = juror === 'volt' ? 1.2 : juror === 'ember' ? .85 : 1
-      utterance.onend = () => resolve()
-      utterance.onerror = () => resolve()
-      window.speechSynthesis.speak(utterance)
+    const waitForPlayback = (start: (done: () => void) => void) => new Promise<void>((resolve) => {
+      let complete = false
+      const done = () => {
+        if (complete) return
+        complete = true
+        if (audioCompletionRef.current === done) audioCompletionRef.current = null
+        resolve()
+      }
+      audioCompletionRef.current = done
+      start(done)
     })
+
+    try {
+      if (muted) {
+        await waitForPlayback((done) => window.setTimeout(done, Math.min(9000, 400 + clean.length * 45)))
+        return
+      }
+      const sessionId = sessionRef.current
+      if (sessionId) {
+        try {
+          const blob = await requestJurorAudio(sessionId, juror, line)
+          // The session may have ended while ElevenLabs was responding. Never
+          // let late audio restart a conversation the builder already left.
+          if (playbackGeneration !== audioGenerationRef.current) return
+          const url = URL.createObjectURL(blob)
+          const audio = new Audio(url)
+          audioUrlRef.current = url
+          audioRef.current = audio
+          audioStartedAt.current = Date.now()
+          await waitForPlayback((done) => {
+            audio.onended = done
+            audio.onerror = done
+            void audio.play().catch(done)
+          })
+          return
+        } catch { /* fall through to the browser voice */ }
+      }
+      if (!('speechSynthesis' in window) || playbackGeneration !== audioGenerationRef.current) return
+      await waitForPlayback((done) => {
+        const utterance = new SpeechSynthesisUtterance(clean)
+        utterance.rate = .98
+        utterance.pitch = juror === 'volt' ? 1.2 : juror === 'ember' ? .85 : 1
+        utterance.onend = done
+        utterance.onerror = done
+        window.speechSynthesis.speak(utterance)
+      })
+    } finally {
+      jurorSpeakingRef.current = false
+      if (audioGenerationRef.current === playbackGeneration) audioCompletionRef.current = null
+    }
   }, [muted, stopAudio])
 
   // ---- live stage feed ---------------------------------------------------
@@ -222,6 +264,17 @@ export default function App() {
   }, [pushTrace])
 
   const runPanelRef = useRef<(from: number) => Promise<void>>(async () => undefined)
+
+  const schedulePitchConclusion = useCallback(() => {
+    if (stageRef.current !== 'pitching' || builderSpeakingRef.current || interjectionPendingRef.current) return
+    if (pitchRef.current.trim().split(/\s+/).length < 12) return
+    if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
+    pitchSilenceTimer.current = window.setTimeout(() => {
+      if (stageRef.current === 'pitching' && !builderSpeakingRef.current && !interjectionPendingRef.current) {
+        void beginDeliberationRef.current()
+      }
+    }, PITCH_SILENCE_MS)
+  }, [])
 
   // ---- conversation ------------------------------------------------------
 
@@ -298,10 +351,10 @@ export default function App() {
 
   const beginDeliberation = useCallback(async () => {
     const sessionId = sessionRef.current
-    if (!sessionId || busyRef.current) return
+    if (!sessionId || deliberationRequestRef.current) return
     if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
     pitchSilenceTimer.current = null
-    busyRef.current = true
+    deliberationRequestRef.current = true
     stopAudio()
     setStage('deliberating')
     setSpeakingJuror(null)
@@ -312,7 +365,6 @@ export default function App() {
     turnsRef.current = []
     turnsDoneRef.current = false
     turnIndexRef.current = 0
-    busyRef.current = false
     try {
       // Turns stream in over the event feed, so the panel usually starts talking
       // while this request is still finishing the verdict and the votes.
@@ -329,11 +381,11 @@ export default function App() {
       setNotice('The jury service is unreachable, so the jurors are speaking from their fallback notes.')
       if (!turnsRef.current.length) turnsRef.current = JURORS.map((juror) => ({ juror: juror.id, line: juror.line, cue: juror.cue, basedOn: { findingIds: [], evidenceIds: [], messagesFrom: [] } }))
       if (stageRef.current === 'deliberating') { setStage('panel'); void runPanelRef.current(0) }
+    } finally {
+      deliberationRequestRef.current = false
     }
   }, [pitch, pushTrace, stopAudio])
 
-  const beginDeliberationRef = useRef(beginDeliberation)
-  const submitAnswerRef = useRef(submitAnswer)
   useEffect(() => { runPanelRef.current = runPanel }, [runPanel])
   useEffect(() => { beginDeliberationRef.current = beginDeliberation }, [beginDeliberation])
   useEffect(() => { submitAnswerRef.current = submitAnswer }, [submitAnswer])
@@ -347,16 +399,24 @@ export default function App() {
       setPitch(pitchRef.current)
       setCaption(pitchRef.current.split(/(?<=[.!?])\s/).slice(-2).join(' '))
       // While the builder talks, the panel listens for something it cannot let pass.
-      if (sessionId && text.split(/\s+/).length >= 6 && Date.now() - interjectAt.current > 9000) {
+      if (sessionId && !interjectionPendingRef.current && text.split(/\s+/).length >= 6 && Date.now() - interjectAt.current > 9000) {
         interjectAt.current = Date.now()
-        const interjection = await requestInterjection(sessionId, { pitchSoFar: pitchRef.current, newText: text })
-        if (interjection?.interrupt && stageRef.current === 'pitching') {
-          setFocusJuror(interjection.juror)
-          setCue(`${JUROR_BY_ID[interjection.juror].name} cuts in`)
-          setCaption(interjection.line)
-          await speak(interjection.juror, interjection.line)
-          setSpeakingJuror(null)
-          if (stageRef.current === 'pitching') { setCue('Keep going'); setFocusJuror(null) }
+        interjectionPendingRef.current = true
+        if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
+        pitchSilenceTimer.current = null
+        try {
+          const interjection = await requestInterjection(sessionId, { pitchSoFar: pitchRef.current, newText: text })
+          if (interjection?.interrupt && stageRef.current === 'pitching') {
+            setFocusJuror(interjection.juror)
+            setCue(`${JUROR_BY_ID[interjection.juror].name} cuts in`)
+            setCaption(interjection.line)
+            await speak(interjection.juror, interjection.line)
+            setSpeakingJuror(null)
+            if (stageRef.current === 'pitching') { setCue('Keep going'); setFocusJuror(null) }
+          }
+        } finally {
+          interjectionPendingRef.current = false
+          schedulePitchConclusion()
         }
       }
       return
@@ -366,13 +426,14 @@ export default function App() {
       if (answerTimer.current) window.clearTimeout(answerTimer.current)
       answerTimer.current = window.setTimeout(() => void submitAnswerRef.current(), 900)
     }
-  }, [speak])
+  }, [schedulePitchConclusion, speak])
 
   const handleSpeechStart = useCallback(() => {
     setListening(true)
     if (Date.now() - audioStartedAt.current < SELF_ECHO_MS) return
-    // Barge-in: the builder talking over a juror stops that juror mid-sentence.
-    if (stageRef.current === 'panel' && audioRef.current) {
+    // Barge-in: the builder talking over a juror stops that juror mid-sentence,
+    // whether it is an early interruption or a later panel exchange.
+    if ((stageRef.current === 'pitching' || stageRef.current === 'panel') && jurorSpeakingRef.current) {
       bargedRef.current = true
       stopAudio()
       setSpeakingJuror(null)
@@ -402,20 +463,17 @@ export default function App() {
     if (sessionRef.current) {
       const mic = await openMicrophone(sessionRef.current, {
         onSpeechStart: () => {
+          builderSpeakingRef.current = true
           if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
           pitchSilenceTimer.current = null
           handleSpeechStart()
         },
         onSpeechStop: () => {
+          builderSpeakingRef.current = false
           setListening(false)
-          // A natural pause is the only "submit" action.  Keeping this here,
+          // A natural pause is the only "submit" action. Keeping this here,
           // rather than a button on the art, makes the stage behave like a call.
-          if (stageRef.current === 'pitching' && pitchRef.current.trim().split(/\s+/).length >= 12) {
-            if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
-            pitchSilenceTimer.current = window.setTimeout(() => {
-              if (stageRef.current === 'pitching') void beginDeliberationRef.current()
-            }, PITCH_SILENCE_MS)
-          }
+          schedulePitchConclusion()
         },
         onPartial: setPartial,
         onUtterance: (text) => void handleUtterance(text),
@@ -426,7 +484,7 @@ export default function App() {
       })
       micRef.current = mic
     } else setStage('text')
-  }, [handleSpeechStart, handleUtterance, mode, onStageEvent, pitch])
+  }, [handleSpeechStart, handleUtterance, mode, onStageEvent, pitch, schedulePitchConclusion])
 
   const submitTypedPitch = useCallback(async (event: FormEvent) => {
     event.preventDefault()
@@ -442,6 +500,10 @@ export default function App() {
 
   const endSession = useCallback(() => {
     stopAudio()
+    builderSpeakingRef.current = false
+    jurorSpeakingRef.current = false
+    interjectionPendingRef.current = false
+    deliberationRequestRef.current = false
     micRef.current?.stop()
     micRef.current = null
     unsubscribeRef.current?.()
@@ -483,6 +545,10 @@ export default function App() {
     answerRef.current = ''
     turnsRef.current = []
     turnIndexRef.current = 0
+    builderSpeakingRef.current = false
+    jurorSpeakingRef.current = false
+    interjectionPendingRef.current = false
+    deliberationRequestRef.current = false
     if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)
     pitchSilenceTimer.current = null
     setDeliberation(null)

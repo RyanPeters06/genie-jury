@@ -217,7 +217,7 @@ export async function speak(juror: JurorId, ledger: Ledger, env: SwarmEnv, optio
 Voice: ${profile.voice}
 ${profile.never}
 You are one person in a real conversation, not a narrator. Refer to the builder's actual words. Build on what the other jurors found instead of repeating it; if you use another juror's finding, name them naturally ("Gale checked that"). Evidence language is strict: verified, contested, or unproven; never claim a source that is not in the ledger.
-Length: 25 to 60 words, one observation and one pointed question. ${juror === 'volt' ? 'Volt rule: exactly two sentences. The first is one cheeky PG-13 roast of the IDEA, never the builder. The second is a sincere, useful question and must end with a question mark. No sexual content, slurs, profanity, or personal attacks.' : ''} Return the spoken text in "line". You may include at most two of these ElevenLabs delivery tags inline where a real person would breathe or react: ${profile.audioTags.join(' ')}. Never use other bracketed tags. "cue" is a 2 to 6 word stage caption. "basedOnFindingIds" lists ledger finding ids you drew on.`
+Length: 18 to 56 words, one observation and one pointed question. ${juror === 'volt' ? 'Volt rule: exactly two sentences and at most 44 words. The first is one cheeky PG-13 roast of the IDEA, never the builder. The second is a sincere, useful question and must end with a question mark. No sexual content, slurs, profanity, or personal attacks.' : ''} Return the spoken text in "line". You may include at most two of these ElevenLabs delivery tags inline where a real person would breathe or react: ${profile.audioTags.join(' ')}. Never use other bracketed tags. "cue" is a 2 to 6 word stage caption. "basedOnFindingIds" lists ledger finding ids you drew on.`
 
   const input = [
     `Pitch:\n${ledger.pitch}`,
@@ -236,9 +236,14 @@ Length: 25 to 60 words, one observation and one pointed question. ${juror === 'v
     if (typeof value !== 'object' || value === null || typeof (value as Out).line !== 'string' || typeof (value as Out).cue !== 'string') return false
     const line = (value as Out).line.trim()
     if (line.length < 12 || line.length > 520) return false
+    const spoken = line.replace(/\[[^\]]{1,24}\]/g, '').replace(/\s{2,}/g, ' ').trim()
+    const wordCount = spoken.split(/\s+/).filter(Boolean).length
+    // A panelist should sound like a person in a live meeting, not a report.
+    // Keeping every turn short also gives the builder a natural opening to cut in.
+    if (wordCount < 8 || wordCount > (juror === 'volt' ? 44 : 56) || !/\?\s*$/.test(spoken)) return false
     if (juror !== 'volt') return true
-    const sentences = line.replace(/\[[^\]]{1,24}\]/g, '').match(/[^.!?]+[.!?]+/g) ?? []
-    return sentences.length === 2 && /\?\s*$/.test(line)
+    const sentences = spoken.match(/[^.!?]+[.!?]+/g) ?? []
+    return sentences.length === 2
   }
 
   let out: Out | null = null

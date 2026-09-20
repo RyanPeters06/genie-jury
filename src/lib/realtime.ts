@@ -108,7 +108,17 @@ function connectBrowserSpeech(stream: MediaStream, events: MicEvents): Mic | nul
     }
   }
   recognition.onend = () => { if (!stopped) recognition.start() }
-  recognition.onerror = () => events.onError('speech-recognition')
-  recognition.start()
+  recognition.onerror = (event: Event & { error?: string }) => {
+    // Chrome may emit transient "no-speech" or "aborted" events while it
+    // restarts continuous recognition. Dropping into typed mode for either
+    // feels like the jury lost the conversation, so reserve fallback for
+    // errors that actually make transcription unusable.
+    if (event.error === 'no-speech' || event.error === 'aborted') return
+    stopped = true
+    recognition.stop()
+    stream.getTracks().forEach((track) => track.stop())
+    events.onError(event.error === 'not-allowed' || event.error === 'service-not-allowed' ? 'microphone-denied' : 'speech-recognition')
+  }
+  try { recognition.start() } catch { events.onError('speech-recognition') }
   return { kind: 'browser', stop: () => { stopped = true; recognition.stop(); stream.getTracks().forEach((track) => track.stop()) } }
 }
