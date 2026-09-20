@@ -77,8 +77,18 @@ export async function readPage(
   try {
     await browser.open()
     const capture = await browser.capture(url, { screenshot: true })
+    // A navigation that failed still resolves, landing on an error page with no
+    // text. Recording that as evidence puts a chrome-error:// URL in the
+    // receipts the builder is shown, so treat it as an unread page.
+    if (!isReadable(capture.finalUrl, capture.excerpt)) return null
     return { finalUrl: capture.finalUrl, title: capture.title, excerpt: capture.excerpt, screenshotDataUrl: capture.screenshotDataUrl, capturedAt: capture.capturedAt, via: 'live' }
   } catch { return null }
+}
+
+/** A page the browser could not actually load is not a source. */
+function isReadable(finalUrl: string, text: string) {
+  if (/^(chrome-error|about:blank|data:)/i.test(finalUrl)) return false
+  return text.trim().length >= 120
 }
 
 /**

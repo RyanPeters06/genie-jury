@@ -35,7 +35,27 @@ void (async () => {
   }
 })()
 
-const result = await (await fetch(`${base}/sessions/${session.id}/deliberate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transcript: pitch }) })).json()
+/**
+ * A deliberation holds one request open for the better part of a minute, and a
+ * socket dropped at the 50-second mark would otherwise throw away the whole
+ * report. The server finishes the work regardless, so on a transport failure
+ * collect the result from the session instead of starting over.
+ */
+async function deliberate() {
+  try {
+    return await (await fetch(`${base}/sessions/${session.id}/deliberate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transcript: pitch }) })).json()
+  } catch (error) {
+    console.log(`  (the request socket dropped: ${error.cause?.code ?? error.message}; collecting the result from the session)`)
+    for (let waited = 0; waited < 120000; waited += 2000) {
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      const response = await fetch(`${base}/sessions/${session.id}/deliberation`).catch(() => null)
+      if (response?.ok) return response.json()
+    }
+    return { error: 'The jury never finished.' }
+  }
+}
+
+const result = await deliberate()
 if (result.error) { console.error(result); process.exit(1) }
 const { ledger, turns, verdict, runTree, mode } = result
 
@@ -55,7 +75,12 @@ heading('MESSAGES BETWEEN AGENTS')
 for (const message of ledger.messages) console.log(`  ${message.from} → ${message.to}  ${message.kind.padEnd(16)} ${JSON.stringify(message.payload).slice(0, 110)}`)
 
 heading('EVIDENCE GATHERED')
-for (const item of ledger.evidence) console.log(`  ${item.status.toUpperCase().padEnd(10)} ${item.sourceUrl ?? '(no source)'}\n    ${item.rationale ?? ''}\n    requested by ${item.requestedBy}, screenshot ${item.screenshotCaptured ? 'captured' : 'none'}`)
+for (const item of ledger.evidence) console.log([
+  `  ${item.status.toUpperCase().padEnd(10)} ${item.judged ? 'judged  ' : 'observed'} via ${(item.via ?? 'unknown').padEnd(7)} ${item.sourceUrl ?? '(no source)'}`,
+  `    ${item.rationale ?? ''}`,
+  `    requested by ${item.requestedBy}, screenshot ${item.screenshotCaptured ? 'captured' : 'none'}`,
+  item.interaction ? `    interacted: "${item.interaction.instruction}"\n      -> ${item.interaction.extracted ?? item.interaction.acted}` : '',
+].filter(Boolean).join('\n'))
 
 heading('FINDINGS ON THE SHARED LEDGER')
 for (const finding of ledger.findings) console.log(`  ${finding.agent.padEnd(6)} ${finding.kind.padEnd(10)} sev${finding.severity}  ${finding.summary}`)
