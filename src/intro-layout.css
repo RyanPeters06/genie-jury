@@ -4,24 +4,20 @@
  * feels like one jury convening rather than four separate floating stickers.
  */
 
-/* Enter-the-jury scene: a balanced row beneath the invitation copy. */
+/* Enter-the-jury scene: copy sits in the upper sky; every full juror silhouette
+   gets its own clear slot below it. Nothing is intentionally clipped. */
 .intro-screen .juror-ember,
+.intro-screen .juror-gale,
+.intro-screen .juror-tide,
 .intro-screen .juror-volt {
-  bottom: -10%;
-  width: clamp(160px, 21vw, 300px);
+  bottom: 3vh;
+  width: clamp(130px, 17vw, 265px);
 }
 
 .intro-screen .juror-ember { left: 2%; }
+.intro-screen .juror-gale { left: 27%; }
+.intro-screen .juror-tide { right: 27%; }
 .intro-screen .juror-volt { right: 2%; }
-
-.intro-screen .juror-gale,
-.intro-screen .juror-tide {
-  bottom: -6%;
-  width: clamp(140px, 18vw, 255px);
-}
-
-.intro-screen .juror-gale { left: 28%; }
-.intro-screen .juror-tide { right: 28%; }
 
 /* Pitch mode is intentionally more theatrical: outer jurors anchor the
  * foreground while Gale and Tide rise together toward the centre. */
@@ -44,23 +40,22 @@
 .pitch-stage .juror-tide { right: 23%; }
 
 @media (max-width: 760px) {
+  .intro-copy {
+    top: 9vh;
+  }
+
   .intro-screen .juror-ember,
-  .intro-screen .juror-volt {
-    bottom: -3%;
-    width: 43vw;
-  }
-
-  .intro-screen .juror-ember { left: -6%; }
-  .intro-screen .juror-volt { right: -6%; }
-
   .intro-screen .juror-gale,
-  .intro-screen .juror-tide {
-    bottom: 23%;
-    width: 35vw;
+  .intro-screen .juror-tide,
+  .intro-screen .juror-volt {
+    bottom: 3vh;
+    width: 23vw;
   }
 
-  .intro-screen .juror-gale { left: 8%; }
-  .intro-screen .juror-tide { right: 8%; }
+  .intro-screen .juror-ember { left: 1%; }
+  .intro-screen .juror-gale { left: 26%; }
+  .intro-screen .juror-tide { right: 26%; }
+  .intro-screen .juror-volt { right: 1%; }
 
   .pitch-stage .juror-ember,
   .pitch-stage .juror-volt {
