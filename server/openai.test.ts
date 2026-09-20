@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deterministicInterjection } from './openai.ts'
+import { deterministicInterjection, replyWhileResearching } from './openai.ts'
 
 describe('live pitch interjections', () => {
   it('turns an unsupported uniqueness claim into an intent to research, not a fabricated receipt', () => {
@@ -17,5 +17,17 @@ describe('live pitch interjections', () => {
     const turn = deterministicInterjection('Plus we also have journaling and social features.', [])
     expect(turn?.juror).toBe('ember')
     expect(turn?.trigger).toBe('scope creep')
+  })
+
+  it('gives a substantial ordinary pitch a human first question instead of silence', () => {
+    const turn = deterministicInterjection('We are building a shared planning space for student teams that turns chaotic project notes into a clear next action for every teammate.', [])
+    expect(turn).toMatchObject({ interrupt: true, juror: 'tide', trigger: 'first user question' })
+    expect(turn?.line).toMatch(/real person/i)
+  })
+
+  it('keeps a live reply conversational without pretending background research is finished', async () => {
+    const turn = await replyWhileResearching({ juror: 'gale', pitch: 'A planning tool for student teams.', answer: 'Teams would use it right before a hackathon deadline.' }, { PORT: 0, OPENAI_MODEL: 'test', OPENAI_FAST_MODEL: 'test', OPENAI_REALTIME_MODEL: 'test', ELEVENLABS_MODEL: 'test' })
+    expect(turn.line).toMatch(/what result/i)
+    expect(turn.line).not.toMatch(/I (looked|found|verified|disproved)/i)
   })
 })

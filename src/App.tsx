@@ -14,7 +14,7 @@ import { JuryTrace, traceFromFinding, traceFromNode } from './components/JuryTra
 import type { TraceItem } from './components/JuryTrace'
 import {
   createRemoteSession, finishRemoteSession, getConnectionState, getServiceHealth,
-  PitchValidationError, requestDeliberation, requestInterjection, requestJurorAudio, requestReply, subscribeToStage,
+  PitchValidationError, requestDeliberation, requestInterjection, requestJurorAudio, requestLiveReply, requestReply, subscribeToStage,
 } from './lib/jury-api'
 import type { ConnectionState, Deliberation, Evidence, Finding, JurorId, JurorTurn, RunNode, StageEvent } from './lib/jury-api'
 import { openMicrophone } from './lib/realtime'
@@ -99,7 +99,14 @@ function scorePitch(evidence: Evidence[], findings: Finding[]): Scorecard[] {
 
 /** Barge-in guard: ignore mic activity for a moment after audio starts so a juror does not interrupt itself. */
 const SELF_ECHO_MS = 700
-const PITCH_SILENCE_MS = 3200
+// Realtime VAD already waits for the builder to finish a phrase. This is only
+// the final beat before research begins, so keep it short enough to feel like
+// a panel responding rather than a page loading.
+const PITCH_SILENCE_MS = 1400
+// Do not make a presenter speak uninterrupted for ten seconds before a second
+// juror can react. This leaves room to answer the first interruption while
+// avoiding a noisy panel talking over every sentence.
+const INTERJECTION_COOLDOWN_MS = 5000
 
 export default function App() {
   const [stage, setStage] = useState<Stage>('intro')
@@ -118,7 +125,9 @@ export default function App() {
   const [evidence, setEvidence] = useState<Evidence[]>([])
   const [browser, setBrowser] = useState<BrowserActivity>(idleBrowserActivity)
   const [trace, setTrace] = useState<TraceItem[]>([])
-  const [dockOpen, setDockOpen] = useState(true)
+  // Research is visible on demand. Keeping the Browserbase dock collapsed lets
+  // the jurors own the stage until the presenter chooses to watch Gale work.
+  const [dockOpen, setDockOpen] = useState(false)
   const [traceOpen, setTraceOpen] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -248,7 +257,6 @@ export default function App() {
     switch (event.type) {
       case 'browser.session':
         setBrowser((current) => ({ ...current, sessionId: String(data.sessionId ?? ''), liveViewUrl: (data.liveViewUrl as string) ?? null, agent: (data.agent as string) ?? current.agent, status: 'browsing' }))
-        setDockOpen(true)
         break
       case 'browser.search':
         setBrowser((current) => ({ ...current, status: 'searching', agent: (data.agent as string) ?? current.agent, lastQuery: String(data.query ?? ''), hits: (data.results as Array<{ title: string; url: string }>) ?? [] }))
@@ -269,7 +277,7 @@ export default function App() {
         setBrowser((current) => ({ ...current, status: 'done', liveViewUrl: null }))
         break
       case 'browser.error':
-        setBrowser((current) => ({ ...current, status: current.screenshots.length ? current.status : 'error' }))
+        setBrowser((current) => ({ ...current, status: current.screenshots.length ? current.status : 'error', lastAction: 'Live browser unavailable; research is continuing through Browserbase Fetch/Search.' }))
         break
       case 'pitch.invalid':
         setNotice(String(data.message ?? 'The jury needs a real pitch before it can deliberate.'))
@@ -365,7 +373,12 @@ export default function App() {
     setCue(`${JUROR_BY_ID[juror].name} is considering your answer`)
     setCaption(text)
     try {
-      const { turn } = await requestReply(sessionId, juror, text)
+      // The jury can answer naturally before Gale's background work has
+      // completed. That fast reply is deliberately evidence-free; once the
+      // full ledger is ready, later exchanges use the grounded reply route.
+      const { turn } = turnsDoneRef.current
+        ? await requestReply(sessionId, juror, text)
+        : await requestLiveReply(sessionId, juror, text)
       turnsRef.current = turnsRef.current.map((item, index) => (index === turnIndexRef.current ? turn : item))
       setCue(turn.cue)
       setCaption(turn.line)
@@ -444,7 +457,7 @@ export default function App() {
       setPitch(pitchRef.current)
       setCaption(pitchRef.current.split(/(?<=[.!?])\s/).slice(-2).join(' '))
       // While the builder talks, the panel listens for something it cannot let pass.
-      if (sessionId && !interjectionPendingRef.current && text.split(/\s+/).length >= 6 && Date.now() - interjectAt.current > 9000) {
+      if (sessionId && !interjectionPendingRef.current && text.split(/\s+/).length >= 6 && Date.now() - interjectAt.current > INTERJECTION_COOLDOWN_MS) {
         interjectAt.current = Date.now()
         interjectionPendingRef.current = true
         if (pitchSilenceTimer.current) window.clearTimeout(pitchSilenceTimer.current)

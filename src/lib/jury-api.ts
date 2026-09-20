@@ -89,6 +89,14 @@ export async function requestReply(sessionId: string, juror: JurorId, transcript
   return response.json() as Promise<{ turn: JurorTurn; runTree: RunNode[]; ledger: Ledger }>
 }
 
+/** Reply without waiting for the research run to finish; the server keeps this
+ * deliberately evidence-free so a juror never pretends Gale has finished. */
+export async function requestLiveReply(sessionId: string, juror: JurorId, transcript: string): Promise<{ turn: JurorTurn }> {
+  const response = await post(`/sessions/${sessionId}/live-reply`, { juror, transcript })
+  if (!response.ok) throw new Error('The juror could not reply live.')
+  return response.json() as Promise<{ turn: JurorTurn }>
+}
+
 export async function requestJurorAudio(sessionId: string, juror: JurorId, line: string) {
   const response = await post(`/sessions/${sessionId}/juror-audio`, { juror, line })
   if (!response.ok) throw new Error('Juror audio is unavailable.')

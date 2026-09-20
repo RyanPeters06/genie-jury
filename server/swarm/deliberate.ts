@@ -8,7 +8,7 @@ import type { DeliberationResult, JurorId, JurorTurn, LedgerSnapshot, RunNode, S
  * agents already posted to the ledger is enough for the jury to speak from,
  * so an unresponsive page never costs the demo its panel.
  */
-const INVESTIGATION_DEADLINE_MS = 70000
+const INVESTIGATION_DEADLINE_MS = 24000
 
 function withDeadline<T>(ms: number, work: Promise<T>): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout>
@@ -23,12 +23,13 @@ function withDeadline<T>(ms: number, work: Promise<T>): Promise<T | null> {
  *   run
  *   |- stage: decompose        Bailiff extracts claims and assigns each juror an angle
  *   |- stage: investigate      Ember, Gale, Tide, Volt work in parallel with their own tools
+ *   |- stage: opening panel    The jury starts a real conversation while research runs
  *   |- handoff: research queue Gale services the research requests the others filed
- *   |- stage: speak            Gale, Ember, Tide speak; then Volt, who has heard everyone
  *   \- stage: verdict          The Ally synthesises while each juror votes
  *
- * Each spoken turn is published the moment it is ready, so the stage can start
- * talking while the verdict stage is still running.
+ * Each opening turn is published before evidence collection is complete. This
+ * is deliberate: a real panel asks sharp first questions while another person
+ * is pulling up the receipts, rather than staring at the founder in silence.
  */
 export async function deliberate(pitch: string, mode: 'Hackathon' | 'Startup', env: SwarmEnv, runtime?: SwarmRuntime): Promise<DeliberationResult> {
   const ledger = new Ledger(pitch, mode, runtime)
@@ -45,7 +46,13 @@ export async function deliberate(pitch: string, mode: 'Hackathon' | 'Startup', e
     ledger.trackAgentSpan('bailiff', null)
   })
 
-  await ledger.span('stage', 'system', 'Investigate in parallel', async (stage) => {
+  const turns: JurorTurn[] = []
+  const publish = (turn: JurorTurn) => runtime?.emit({ type: 'juror.turn', at: new Date().toISOString(), data: { ...turn } })
+
+  // Let the autonomous researchers begin immediately. Their web work remains
+  // independent from the live conversation, so a slow page cannot mute the
+  // whole panel.
+  const investigation = ledger.span('stage', 'system', 'Investigate in parallel', async (stage) => {
     const work = Promise.all(SPEAKING_ORDER.map((juror) => ledger.span('agent', juror, `${JURORS[juror].name} investigates`, async (node) => {
       ledger.trackAgentSpan(juror, node)
       const findings = await investigate(juror, ledger, env)
@@ -56,33 +63,29 @@ export async function deliberate(pitch: string, mode: 'Hackathon' | 'Startup', e
     if (finished === null) ledger.finish(stage, 'done', { note: 'Cut short on the deadline; the jury speaks from what was already found.' })
   })
 
-  await ledger.span('handoff', 'gale', 'Gale services the research queue', async (node) => {
-    ledger.trackAgentSpan('gale', node)
-    const results = await serviceResearchRequests(ledger, env)
-    ledger.finish(node, results.length ? 'done' : 'skipped', { serviced: results.length, statuses: results.map((item) => item.status) })
-    ledger.trackAgentSpan('gale', null)
-  })
-
-  const turns: JurorTurn[] = []
-  const publish = (turn: JurorTurn) => runtime?.emit({ type: 'juror.turn', at: new Date().toISOString(), data: { ...turn } })
-
-  await ledger.span('stage', 'system', 'Jurors speak', async (stage) => {
-    const first = SPEAKING_ORDER.filter((juror) => juror !== 'volt')
-    const spoken = await Promise.all(first.map((juror) => ledger.span('agent', juror, `${JURORS[juror].name} speaks`, async (node) => {
+  // The opening is intentionally evidence-free: the jurors ask about the
+  // builder's own words while the agents check the web in the background.
+  // This is what makes the call feel like a live Shark Tank conversation rather
+  // than a form submission followed by a loading spinner.
+  await ledger.span('stage', 'system', 'Opening panel while evidence is gathered', async (stage) => {
+    const openingOrder = SPEAKING_ORDER.filter((juror) => juror !== 'volt')
+    const opening = await Promise.all(openingOrder.map((juror) => ledger.span('agent', juror, `${JURORS[juror].name} opens the conversation`, async (node) => {
       ledger.trackAgentSpan(juror, node)
       const turn = await speak(juror, ledger, env)
       ledger.trackAgentSpan(juror, null)
       return turn
     }, { parent: stage })))
-    // Publish in speaking order so the stage never plays Ember before Gale.
-    for (const juror of first) {
-      const turn = spoken.find((item) => item.juror === juror)
+    // Publish in a consistent order even though the language-model calls ran
+    // concurrently. The UI queues one voice at a time, so the audience hears a
+    // composed panel rather than audio racing each other.
+    for (const juror of openingOrder) {
+      const turn = opening.find((item) => item.juror === juror)
       if (!turn) continue
       turns.push(turn)
       publish(turn)
+      ledger.send(turn.juror, 'volt', 'finding.shared', { line: turn.line, phase: 'opening' }, stage)
     }
-    for (const turn of spoken) ledger.send(turn.juror, 'volt', 'finding.shared', { line: turn.line }, stage)
-    const volt = await ledger.span('agent', 'volt', 'Volt speaks last, having heard everyone', async (node) => {
+    const volt = await ledger.span('agent', 'volt', 'Volt opens after hearing the room', async (node) => {
       ledger.trackAgentSpan('volt', node)
       const turn = await speak('volt', ledger, env)
       ledger.trackAgentSpan('volt', null)
@@ -90,6 +93,15 @@ export async function deliberate(pitch: string, mode: 'Hackathon' | 'Startup', e
     }, { parent: stage })
     turns.push(volt)
     publish(volt)
+  })
+
+  await investigation
+
+  await ledger.span('handoff', 'gale', 'Gale services the research queue', async (node) => {
+    ledger.trackAgentSpan('gale', node)
+    const results = await serviceResearchRequests(ledger, env)
+    ledger.finish(node, results.length ? 'done' : 'skipped', { serviced: results.length, statuses: results.map((item) => item.status) })
+    ledger.trackAgentSpan('gale', null)
   })
 
   const verdict = await ledger.span('stage', 'ally', 'Verdict and votes', async (node) => {

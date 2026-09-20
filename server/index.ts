@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { browserbaseConfigured } from './browserbase.ts'
 import { synthesize } from './elevenlabs.ts'
 import { loadEnv, serviceHealth, voiceFingerprint } from './env.ts'
-import { createRealtimeSecret, detectInterjection } from './openai.ts'
+import { createRealtimeSecret, detectInterjection, replyWhileResearching } from './openai.ts'
 import { validatePitch } from './pitch-validation.ts'
 import { SessionStore } from './sessions.ts'
 import type { Session } from './sessions.ts'
@@ -114,6 +114,16 @@ async function handle(request: IncomingMessage, response: ServerResponse) {
     session.interjections.push({ ...interjection, at: new Date().toISOString() })
     store.emit(session, 'juror.interjects', { juror: interjection.juror, line: interjection.line, trigger: interjection.trigger })
     return reply(200, { interjection })
+  }
+
+  // A short, evidence-free exchange keeps the call alive if the builder talks
+  // back before the asynchronous research and verdict have finished.
+  if (request.method === 'POST' && tail === 'live-reply') {
+    const body = await readJson<{ juror?: JurorId; transcript?: string }>(request)
+    if (!isJuror(body?.juror) || !body?.transcript?.trim()) return fail('A juror and a transcript are required.')
+    const turn = await replyWhileResearching({ juror: body.juror, pitch: session.pitch, answer: body.transcript.trim() }, env)
+    store.emit(session, 'juror.replied', { juror: turn.juror, line: turn.line, cue: turn.cue, live: true })
+    return reply(200, { turn, live: true })
   }
 
   if (request.method === 'POST' && tail === 'deliberate') {

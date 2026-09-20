@@ -40,6 +40,16 @@ export function deterministicInterjection(transcript: string, alreadyUsed: Juror
     if (alreadyUsed.includes(trigger.juror)) continue
     if (trigger.pattern.test(transcript)) return { interrupt: true, juror: trigger.juror, line: trigger.line, trigger: trigger.trigger }
   }
+  // A real panel does not stay perfectly quiet until someone says a magic
+  // keyword. Once the builder has put a real idea on the table, one juror earns
+  // a short, human first question while the other agents start their work.
+  const words = transcript.trim().split(/\s+/).filter(Boolean).length
+  if (words >= 18 && !alreadyUsed.includes('tide')) {
+    return { interrupt: true, juror: 'tide', line: '[gently] I hear the product. Now give me one real person who reaches for it. Keep going.', trigger: 'first user question' }
+  }
+  if (words >= 18 && !alreadyUsed.includes('ember')) {
+    return { interrupt: true, juror: 'ember', line: 'Before this becomes a whole platform, what is the one thing you can ship tonight? Keep going.', trigger: 'first scope question' }
+  }
   return null
 }
 
@@ -51,11 +61,41 @@ export async function detectInterjection(input: { pitchSoFar: string; newText: s
   const result = await structured<Interjection>({ OPENAI_API_KEY: env.OPENAI_API_KEY, OPENAI_MODEL: env.OPENAI_FAST_MODEL }, {
     instructions: `You are the floor monitor for Genie Jury, a live pitch panel. The builder is mid-pitch. Decide whether ONE juror should interrupt right now, like a real person who cannot hold it in. Interrupt only for a genuinely provocative moment in the NEWEST words: an absolute claim ("nobody does this"), an unsourced number, a buzzword before a user is named, a fourth feature, or a contradiction. Most of the time the answer is no. Available jurors and voices:
 ${available.map((juror) => `- ${juror}: ${JURORS[juror].role}. ${JURORS[juror].voice}`).join('\n')}
-If interrupting: one spoken sentence, at most 18 words, in that juror's voice, reacting to the exact words. No research has happened yet at this point in the pitch, so a juror may announce that it is about to check something but must never claim it already looked, already found something, or already failed to find something. You may start with one of that juror's tags: ${available.map((juror) => `${juror}: ${JURORS[juror].audioTags.join(' ')}`).join('; ')}. It must end by letting the builder continue (e.g. "keep going"). If not interrupting, set interrupt=false, juror to any available id, line to an empty string.`,
+If interrupting: one spoken sentence, at most 18 words, in that juror's voice, reacting to the exact words. No research has happened yet at this point, so a juror may announce that it is about to check something but must never claim it already looked, already found something, or already failed to find something. After a substantial first pitch (roughly 18 words), ask one concise first question even when there is no dramatic red flag; a real panel responds rather than silently staring. You may start with one of that juror's tags: ${available.map((juror) => `${juror}: ${JURORS[juror].audioTags.join(' ')}`).join('; ')}. It must end by letting the builder continue (e.g. "keep going"). If not interrupting, set interrupt=false, juror to any available id, line to an empty string.`,
     input: `Pitch so far:\n${input.pitchSoFar.slice(-1200)}\n\nNewest words:\n${input.newText}`,
     schema: { name: 'interjection', schema: { type: 'object', properties: { interrupt: { type: 'boolean' }, juror: { type: 'string', enum: available }, line: { type: 'string' }, trigger: { type: 'string' } }, required: ['interrupt', 'juror', 'line', 'trigger'], additionalProperties: false } },
   })
   if (!result) return fallback
-  if (!result.interrupt || !result.line.trim() || !available.includes(result.juror)) return null
+  // The deterministic opener protects the conversational contract if the
+  // monitor model is overly conservative about a perfectly ordinary pitch.
+  if (!result.interrupt || !result.line.trim() || !available.includes(result.juror)) return fallback
   return { ...result, line: result.line.trim().slice(0, 160) }
+}
+
+/**
+ * A juror's immediate reply while the other agents are still checking the
+ * pitch. This deliberately does not consult or claim evidence: it preserves a
+ * natural back-and-forth without pretending that Browserbase has finished.
+ */
+export async function replyWhileResearching(input: { juror: JurorId; pitch: string; answer: string }, env: Env): Promise<{ juror: JurorId; line: string; cue: string; basedOn: { findingIds: string[]; evidenceIds: string[]; messagesFrom: string[] } }> {
+  const profile = JURORS[input.juror]
+  const fallbackLines: Record<JurorId, string> = {
+    ember: 'Good—now cut that down to one screen and one user action. What ships before you add anything else?',
+    gale: 'That is a useful claim, not proof yet. While I check it, what result would make you change your mind?',
+    tide: 'I can hear the intent. Put me in the user\'s last frustrating moment—what did I try before this?',
+    volt: '[laughs] Better. The idea has pants on now. What would make a skeptical teammate actually use it tomorrow?',
+  }
+  const fallback = { juror: input.juror, line: fallbackLines[input.juror], cue: `${profile.name} follows up`, basedOn: { findingIds: [], evidenceIds: [], messagesFrom: [] } }
+  if (!env.OPENAI_API_KEY) return fallback
+  type Out = { line: string; cue: string }
+  const out = await structured<Out>({ OPENAI_API_KEY: env.OPENAI_API_KEY, OPENAI_MODEL: env.OPENAI_FAST_MODEL }, {
+    instructions: `You are ${profile.name}, ${profile.role}, in a live Genie Jury pitch conversation. The other jurors are still researching in the background. Reply directly to the builder's answer in one concise spoken turn (12–42 words), then ask one pointed follow-up question. You have no research result yet: never claim to have checked, found, verified, or disproved anything. Be human and conversational, not a narrator. ${profile.voice} ${profile.never} ${input.juror === 'volt' ? 'Volt may make one kind PG-13 joke about the idea, never the builder. No profanity, slurs, sexual content, or personal attacks.' : ''}`,
+    input: `Original pitch:\n${input.pitch.slice(0, 1600)}\n\nThe builder just answered you:\n${input.answer.slice(0, 600)}`,
+    schema: { name: 'live_juror_reply', schema: { type: 'object', properties: { line: { type: 'string' }, cue: { type: 'string' } }, required: ['line', 'cue'], additionalProperties: false } },
+  })
+  const line = out?.line?.trim().slice(0, 320) ?? ''
+  const spoken = line.replace(/\[[^\]]{1,24}\]/g, '').trim()
+  const words = spoken.split(/\s+/).filter(Boolean).length
+  if (words < 8 || words > 48 || !/[?]$/.test(spoken)) return fallback
+  return { ...fallback, line, cue: out?.cue?.trim().slice(0, 80) || fallback.cue }
 }

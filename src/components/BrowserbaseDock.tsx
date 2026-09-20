@@ -37,7 +37,7 @@ export function BrowserbaseDock({ activity, evidence, expanded, onToggle, jurorN
       <div className="bb-frame">
         {live && activity.liveViewUrl ? <iframe src={activity.liveViewUrl} title="Browserbase live session" sandbox="allow-scripts allow-same-origin allow-popups allow-forms" allow="clipboard-read; clipboard-write" />
           : shot ? <img src={shot.dataUrl} alt={`Screenshot of ${shot.title}`} />
-          : <div className="bb-empty"><b>Live cloud browser</b><span>When a juror needs proof, a real browser opens here. The jury never invents a source.</span></div>}
+          : <div className="bb-empty"><b>{activity.status === 'error' ? 'Live browser unavailable' : 'Live cloud browser'}</b><span>{activity.status === 'error' ? 'Research is continuing through Browserbase Fetch and Search. No live-view receipt was captured for this run.' : 'When Gale needs proof, a real browser opens here. The jury never invents a source.'}</span></div>}
         {activity.currentUrl && <span className="bb-url">{host(activity.currentUrl)}</span>}
       </div>
       <div className="bb-meta">
