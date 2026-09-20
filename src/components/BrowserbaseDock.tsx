@@ -44,7 +44,7 @@ export function BrowserbaseDock({ activity, evidence, expanded, onToggle, jurorN
         {activity.lastQuery && <p><b>SEARCH</b>{activity.lastQuery}</p>}
         {activity.hits.length > 0 && <ul className="bb-hits">{activity.hits.slice(0, 3).map((hit) => <li key={hit.url}><a href={hit.url} target="_blank" rel="noreferrer">{hit.title || host(hit.url)}</a><small>{host(hit.url)}</small></li>)}</ul>}
         {activity.lastAction && <p><b>ACTION</b>{activity.lastAction}</p>}
-        {latest && <div className={`bb-verdict ${latest.status}`}><b>{latest.status.toUpperCase()}</b><span>{latest.rationale ?? latest.excerpt ?? 'No rationale recorded.'}</span>{latest.sourceUrl && <a href={latest.sourceUrl} target="_blank" rel="noreferrer">{latest.title || host(latest.sourceUrl)}</a>}</div>}
+        {latest && <div className={`bb-verdict ${latest.status}`}><b>{latest.status.toUpperCase()}</b>{latest.via && <i className="bb-provenance">{latest.via === 'live' ? 'LIVE' : latest.via === 'fetch' ? 'FETCHED' : 'SEARCH'}</i>}<span>{latest.rationale ?? latest.excerpt ?? 'No rationale recorded.'}</span>{latest.sourceUrl && <a href={latest.sourceUrl} target="_blank" rel="noreferrer">{latest.title || host(latest.sourceUrl)}</a>}</div>}
       </div>
     </div>}
   </aside>

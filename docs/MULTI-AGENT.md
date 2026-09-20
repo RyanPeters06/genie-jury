@@ -15,9 +15,9 @@ between stages, a **message bus**, and an inspectable **run tree**.
 | Agent | Role | Mandate | Tools |
 | --- | --- | --- | --- |
 | **Bailiff** | Leader | Extract the riskiest claims, give each juror one angle so they do not overlap. Never speaks on stage. | structured extraction |
-| **Ember** | The Builder | Can this ship by demo day, and what is the smallest version that proves it? | `read_ledger` `search_web` `browse_site` `request_research` `message_juror` |
+| **Ember** | The Builder | Can this ship by demo day, and what is the smallest version that proves it? | `read_ledger` `search_web` `browse_site` (Fetch, then live fallback) `request_research` `message_juror` |
 | **Gale** | The Skeptic | Which claim is most dangerous if wrong, and what does live evidence say? | `read_ledger` `research_claim` `act_on_page` `search_web` `message_juror` |
-| **Tide** | The User | Who has this problem, what do they do today, what would make them switch? | `read_ledger` `search_web` `browse_site` `request_research` `message_juror` |
+| **Tide** | The User | Who has this problem, what do they do today, what would make them switch? | `read_ledger` `search_web` `browse_site` (Fetch, then live fallback) `request_research` `message_juror` |
 | **Volt** | The Jester | What is the one flaw everyone is dancing around? | `read_ledger` `request_research` `message_juror` |
 | **Ally** | Synthesiser | Turn the ledger into the smallest credible next build. Never argues. | reads the whole ledger |
 
@@ -34,7 +34,9 @@ this object. The ledger holds:
 
 - **claims** the Bailiff extracted, each with an importance and an evidence status
 - **assignments** binding one juror to one question
-- **evidence** with its status, source URL, rationale, and screenshot
+- **evidence** with its status, source URL, rationale, screenshot, provenance
+  (`via`: live, fetch, or search), and whether it was actually adjudicated
+  (`judged`)
 - **findings** each juror posts, typed and severity-rated
 - **messages** between agents
 - **tool calls** with arguments, results, and durations
@@ -115,9 +117,9 @@ The demo must never hang or lie.
   API key at all the full flow still runs from scripted findings.
 - The investigation stage has a hard deadline. If it overruns, the jury speaks
   from whatever is already on the ledger.
-- Evidence with no reachable source is **unproven**. No agent may describe
-  research that did not happen, and the evidence clerk only sees text that was
-  actually fetched.
+- Evidence with no reachable source is **unproven**. A page read is still only
+  an observation; only the evidence clerk may mark it verified or contested,
+  and only a `judged` receipt may move a claim's status.
 
 ## Reusing this
 

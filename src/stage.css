@@ -169,10 +169,21 @@
   padding-left: 9px;
 }
 .bb-verdict b {
-  display: block;
+  display: inline-block;
   font: 700 9px "DM Mono";
   letter-spacing: 0.12em;
   margin-bottom: 3px;
+}
+.bb-provenance {
+  background: #eaf2f8;
+  border: 1px solid #9ab4c7;
+  border-radius: 99px;
+  color: #54718b;
+  font: 700 8px "DM Mono";
+  letter-spacing: 0.08em;
+  margin-left: 6px;
+  padding: 3px 6px;
+  vertical-align: 1px;
 }
 .bb-verdict span { color: #2d5271; display: block; font: 500 11px/1.45 "DM Sans"; }
 .bb-verdict a { color: #2f6ea3; display: block; font: 600 10px "DM Sans"; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

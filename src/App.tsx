@@ -26,7 +26,7 @@ import './stage.css'
 type Stage = 'intro' | 'ready' | 'text' | 'pitching' | 'deliberating' | 'panel' | 'verdict'
 
 type Juror = { id: JurorId; name: string; role: string; image: string; speakingImage: string; accent: string; cue: string; line: string }
-type Scorecard = { juror: JurorId; score: number; summary: string; action: string; criteria: Array<{ label: string; score: number; max: number }> }
+type Scorecard = { juror: JurorId; score: number | null; summary: string; action: string; criteria: Array<{ label: string; score: number | null; max: number }> }
 
 const JURORS: Juror[] = [
   { id: 'ember', name: 'Ember', role: 'The Builder', image: emberListening, speakingImage: emberSpeaking, accent: '#e86748', cue: 'Sizing up the build', line: 'The moment is strong. The scope is not.' },
@@ -40,29 +40,60 @@ const AGENT_LABEL: Record<string, string> = { bailiff: 'Bailiff', ally: 'The All
 const agentName = (agent?: string | null) => (agent && agent in JUROR_BY_ID ? JUROR_BY_ID[agent as JurorId].name : AGENT_LABEL[agent ?? ''] ?? agent ?? 'Jury')
 const agentAccent = (agent: string) => (agent in JUROR_BY_ID ? JUROR_BY_ID[agent as JurorId].accent : '#6d8aa6')
 
-/** A transparent local rubric keeps the verdict useful even if a provider falls back. */
-function scorePitch(pitch: string, evidence: Evidence[], findings: Finding[]): Scorecard[] {
-  const words = pitch.trim().split(/\s+/).filter(Boolean).length
-  const lower = pitch.toLowerCase()
-  const severity = (juror: JurorId) => findings.filter((finding) => finding.agent === juror).reduce((sum, finding) => sum + finding.severity, 0)
-  const hasUser = /\b(user|student|builder|founder|team|people|customer|developer)\b/.test(lower)
-  const hasPain = /\b(problem|pain|struggle|friction|waste|hard|need|without)\b/.test(lower)
-  const verified = evidence.filter((item) => item.status === 'verified').length
-  const grounded = evidence.length > 0
-  const clamp = (score: number) => Math.max(0, Math.min(100, Math.round(score)))
-  const emberScope = clamp(50 - severity('ember') * 7)
-  const emberDemo = clamp(words >= 35 && words <= 180 ? 42 : 25)
-  const galeProof = clamp(verified ? 46 : grounded ? 30 : 16)
-  const galeDiscipline = clamp(50 - severity('gale') * 5)
-  const tidePerson = hasUser ? 43 : 21
-  const tideUrgency = hasPain ? 40 : 20
-  const voltClarity = clamp(words >= 25 && words <= 150 ? 42 : 25)
-  const voltHook = clamp((hasPain ? 28 : 16) + (lower.includes('because') || lower.includes('so that') ? 12 : 4))
+/**
+ * Every visible point comes from a finding or a judged receipt, never from a
+ * keyword in the builder's prose. The scores are a compact rendering of the
+ * agents' ledger, not a second, hidden evaluator.
+ */
+function scorePitch(evidence: Evidence[], findings: Finding[]): Scorecard[] {
+  const clamp = (score: number) => Math.max(0, Math.min(50, Math.round(score)))
+  const forJuror = (juror: JurorId, kind?: Finding['kind']) => findings.filter((finding) => finding.agent === juror && (!kind || finding.kind === kind))
+  const severity = (items: Finding[]) => items.reduce((sum, item) => sum + item.severity, 0)
+  const noScore = (juror: JurorId): Scorecard => ({
+    juror, score: null,
+    summary: 'Not scored: this juror did not deliberate, so there is no agent output to grade.',
+    action: 'Complete a jury deliberation to receive grounded feedback.',
+    criteria: [{ label: 'Jury evidence', score: null, max: 50 }, { label: 'Juror assessment', score: null, max: 50 }],
+  })
+
+  if (!findings.length) return JURORS.map((juror) => noScore(juror.id))
+
+  const card = (juror: JurorId, summary: string, action: string, criteria: Scorecard['criteria']): Scorecard => {
+    if (!forJuror(juror).length) return noScore(juror)
+    const score = criteria.reduce<number>((total, item) => total + (item.score ?? 0), 0)
+    return { juror, score, summary, action, criteria }
+  }
+
+  const emberRisks = severity([...forJuror('ember', 'risk'), ...forJuror('ember', 'question')])
+  const emberCuts = severity(forJuror('ember', 'scope-cut'))
+  const galeRisks = severity(forJuror('gale', 'risk'))
+  const judgedEvidence = evidence.filter((item) => item.judged === true)
+  const galeEvidence = clamp(judgedEvidence.reduce((total, item) => total + (item.status === 'verified' ? 25 : item.status === 'contested' ? 16 : 6), 0))
+  const tideQuestions = severity(forJuror('tide', 'question'))
+  const tideProof = severity(forJuror('tide', 'user-test'))
+  const tideStrength = severity(forJuror('tide', 'strength'))
+  const voltRisk = forJuror('volt', 'risk')
+  const voltHighestRisk = Math.max(0, ...voltRisk.map((finding) => finding.severity))
+  const voltStrength = severity(forJuror('volt', 'strength'))
+  const voltRiskTotal = severity(voltRisk)
+
   return [
-    { juror: 'ember', score: clamp(emberScope + emberDemo), summary: 'Build readiness is scored from scope risks and whether the pitch names a demo-sized moment.', action: 'Cut to one end-to-end interaction.', criteria: [{ label: 'Build scope', score: emberScope, max: 50 }, { label: 'Demo path', score: emberDemo, max: 50 }] },
-    { juror: 'gale', score: clamp(galeProof + galeDiscipline), summary: 'Claim confidence depends on captured Browserbase receipts, not on how confident the pitch sounds.', action: 'Prove the riskiest factual claim.', criteria: [{ label: 'Evidence captured', score: galeProof, max: 50 }, { label: 'Claim discipline', score: galeDiscipline, max: 50 }] },
-    { juror: 'tide', score: clamp(tidePerson + tideUrgency), summary: 'User strength is scored from a named person and a concrete moment of pain or urgency.', action: 'Interview three people in that moment.', criteria: [{ label: 'User specificity', score: tidePerson, max: 50 }, { label: 'Pain & urgency', score: tideUrgency, max: 50 }] },
-    { juror: 'volt', score: clamp(voltClarity + voltHook), summary: 'Pitch clarity rewards a concise story that leads with the problem and gives the demo a hook.', action: 'Open with the problem, then show the wow.', criteria: [{ label: 'Pitch clarity', score: voltClarity, max: 50 }, { label: 'Memorable hook', score: voltHook, max: 50 }] },
+    card('ember', 'Build readiness is drawn from Ember’s scope risks, questions, and named cut—not pitch length.', 'Cut to Ember’s smallest named end-to-end interaction.', [
+      { label: 'Build scope', score: clamp(50 - emberRisks * 7), max: 50 },
+      { label: 'Demo path', score: clamp(emberCuts ? 18 + emberCuts * 10 : 0), max: 50 },
+    ]),
+    card('gale', 'Claim confidence only counts evidence the clerk actually judged, plus Gale’s recorded claim risks.', 'Prove the riskiest factual claim with one stronger receipt.', [
+      { label: 'Evidence captured', score: galeEvidence, max: 50 },
+      { label: 'Claim discipline', score: clamp(50 - galeRisks * 8), max: 50 },
+    ]),
+    card('tide', 'User strength reflects Tide’s unanswered user questions, user-test recommendation, and recorded strengths.', 'Run Tide’s next user test before adding more features.', [
+      { label: 'User specificity', score: clamp(50 - tideQuestions * 8), max: 50 },
+      { label: 'Pain & urgency', score: clamp(tideProof * 12 + tideStrength * 7), max: 50 },
+    ]),
+    card('volt', 'Volt’s score measures the flaw it actually named and the strengths it found against that risk.', 'Use Volt’s clearest flaw to sharpen the opening line.', [
+      { label: 'Clearest flaw', score: clamp(voltHighestRisk * 17), max: 50 },
+      { label: 'Stands out', score: clamp(voltStrength * 15 - voltRiskTotal * 4), max: 50 },
+    ]),
   ]
 }
 
@@ -611,8 +642,9 @@ export default function App() {
   const onStage = stage === 'pitching' || stage === 'deliberating' || stage === 'panel'
   const activeAccent = focusJuror ? JUROR_BY_ID[focusJuror].accent : '#5b87a8'
   const verdict = deliberation?.verdict
-  const scorecards = useMemo(() => scorePitch(pitch, evidence, deliberation?.ledger.findings ?? []), [deliberation, evidence, pitch])
-  const overallScore = Math.round(scorecards.reduce((total, card) => total + card.score, 0) / scorecards.length)
+  const scorecards = useMemo(() => scorePitch(evidence, deliberation?.ledger.findings ?? []), [deliberation, evidence])
+  const scoredCards = scorecards.filter((card) => card.score !== null)
+  const overallScore = scoredCards.length ? Math.round(scoredCards.reduce((total, card) => total + (card.score ?? 0), 0) / scoredCards.length) : null
 
   return <main className={`app day-sky stage-${stage}`} style={{ '--active-accent': activeAccent } as CSSProperties}>
     <Cloudscape />
@@ -693,7 +725,7 @@ export default function App() {
       <div className="scoreboard">
         <div className="scoreboard-intro">
         <p>THE JURY’S SCORECARD</p>
-        <div className="overall-score"><b>{overallScore}</b><span>/ 100<br />OVERALL</span></div>
+        <div className="overall-score"><b>{overallScore ?? '—'}</b><span>{overallScore === null ? 'NOT SCORED' : '/ 100'}<br />OVERALL</span></div>
         <h2>{verdict?.headline ?? `${caseName} has a pulse.`}</h2>
         <span>{verdict?.summary ?? 'The jury found a version worth building. Keep the pressure; cut the platform.'}</span>
         <div className="ally-note">
@@ -721,9 +753,9 @@ export default function App() {
         <div className="juror-score-grid">{scorecards.map((card) => {
           const juror = JUROR_BY_ID[card.juror]
           return <article className="juror-score" key={card.juror} style={{ '--score-color': juror.accent } as CSSProperties}>
-            <div className="score-card-head"><span>{juror.name}<small>{juror.role}</small></span><strong>{card.score}<i>/100</i></strong></div>
+            <div className="score-card-head"><span>{juror.name}<small>{juror.role}</small></span><strong>{card.score ?? '—'}<i>{card.score === null ? 'NOT SCORED' : '/100'}</i></strong></div>
             <p>{card.summary}</p>
-            <div className="criteria-list">{card.criteria.map((criterion) => <div key={criterion.label}><span>{criterion.label}</span><b>{criterion.score}/{criterion.max}</b><i><em style={{ width: `${(criterion.score / criterion.max) * 100}%` }} /></i></div>)}</div>
+            <div className="criteria-list">{card.criteria.map((criterion) => <div key={criterion.label}><span>{criterion.label}</span><b>{criterion.score ?? '—'}/{criterion.max}</b><i><em style={{ width: `${criterion.score === null ? 0 : (criterion.score / criterion.max) * 100}%` }} /></i></div>)}</div>
             <footer><b>NEXT MOVE</b>{card.action}</footer>
           </article>
         })}</div>

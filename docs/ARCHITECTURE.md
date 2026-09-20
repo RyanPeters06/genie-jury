@@ -68,35 +68,43 @@ this gate prevents false confidence, not unusual founders.
 
 ## Browserbase
 
-Three capabilities, chosen per agent:
+Three Browserbase capabilities, deliberately split by owner and cost:
 
-- **Search API** — real titles and URLs for a query. Fast enough for any agent
-  to use freely, about 0.4s.
-- **Live browser session** — a cloud Chrome the audience watches through its
-  live-view URL, embedded on stage. Used to open a source, read it, and
-  screenshot it. About 3s to open, 2s per page.
+- **Search API** — real titles and URLs for a query. Any juror can use it for a
+  quick lead, without opening a browser.
+- **Fetch API** — Ember and Tide read ordinary pages in the background without
+  queuing behind the on-stage browser. A thin JavaScript-rendered response
+  falls back to a live capture rather than silently becoming bad evidence.
+- **Live browser session** — Gale owns the single cloud Chrome the audience
+  watches through its live-view URL. Gale opens sources, captures screenshots,
+  and takes an interactive Stagehand pass on the first research call so the
+  audience sees a real browser action, not just a loaded tab.
 - **Stagehand** — natural-language actions on the open page when the answer is
   behind a click: dismiss the cookie wall, open pricing, expand the reviews.
 
 When an OpenAI key is present the session is launched by Stagehand so its
 extension is installed and actions work. Without one, the session is created
 through the REST API and driven over CDP instead, which still gives the live
-view, the page text, and screenshots. The jurors share one browser and their use
-of it is serialised, so the live view always shows one coherent story.
+view, the page text, and screenshots. Gale remains the live-view owner, so the
+stage always tells one coherent research story while Fetch keeps background
+reading fast.
+
+### Evidence honesty
+
+Evidence is **verified**, **contested**, or **unproven**. Only the evidence
+clerk assigns those statuses after adjudicating a claim against returned text.
+A fetched, searched, or live page read without that judgement is an observation
+and stays `unproven`; it cannot change a claim status. The stage also displays
+whether the receipt was read LIVE, FETCHED, or found through SEARCH.
 
 ## Voices
 
-Each juror has its own ElevenLabs voice and its own delivery profile: stability,
-similarity, style, and speed tuned to the personality. Lines are written for
-Eleven v3, which performs inline audio tags such as `[laughs]` and `[pauses]`.
-Jurors may only use tags from their own whitelist, at most two per line, and
-anything else in brackets is stripped before the text reaches the API. If v3 is
-unavailable the request falls back to Multilingual v2 with the tags removed, so
-the jury never goes silent.
-
-Eleven v3 requests deliberately omit `previous_text` and `next_text`: that
-model rejects both fields. If the fallback v2 model is used, the server may pass
-them after stripping delivery tags.
+Each juror has its own ElevenLabs voice and delivery profile. Eleven v3 handles
+the showcase lines; it rejects `previous_text` and ignores numeric `speed`, so
+its request shape deliberately omits both. If it is unavailable, the app falls
+back to **Flash v2.5** with tags removed and its per-juror speed setting, so the
+jury never goes silent. See [voice casting](VOICES.md) for the listening-pass
+notes and the final cast.
 
 ## Failure behaviour
 

@@ -88,6 +88,8 @@ set `PORT` and `VITE_JURY_API_URL` together if another checkout is running.
   must still run.
 - Every new browser or model call needs a timeout. One hung request blocks the
   queue the jurors share and freezes the panel in front of an audience.
+- Reading a page is an unproven observation. Only the evidence clerk may mark a
+  receipt verified or contested.
 - Treat input validation as part of the product: never deliberate on an empty
   turn, greeting, mic check, or obvious side conversation. Return a clear,
   actionable prompt and preserve the builder's place instead of fabricating a
